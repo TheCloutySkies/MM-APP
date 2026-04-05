@@ -38,8 +38,19 @@ If the build log shows **Success: Build command completed** and **Exported: dist
 
 If you created a **Worker** (e.g. `*.workers.dev`) instead of **Pages**, the build must upload **`dist/`** as [static assets](https://developers.cloudflare.com/workers/static-assets/). This repo includes **`wrangler.toml`**: it sets `assets.directory` to `./dist` and `not_found_handling = "single-page-application"` so deep links (e.g. `/login`) work.
 
-- **Root directory** in the dashboard must be the **repo root** (where `package.json`, `wrangler.toml`, and **`worker/`** live), **not** `dist`.
-- After deploy, if you still see **Hello world**, the deploy is still using a **placeholder Worker** (or `dist/` was empty at upload time). This repo sets **`main = "worker/index.js"`** and **`assets.binding = "ASSETS"`** so the bundle serves files from `./dist`. In the dashboard, remove any **Quick edit / inline** Worker script that only returns “Hello world”, then redeploy — Git should own the Worker source.
+[Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/) run a **build command**, then a **deploy command**. The deploy step must run Wrangler — default is **`npx wrangler deploy`**. If you set **Deploy command** to **`true`** (a trick that only applies to some **Pages** setups), **Wrangler never runs**: Cloudflare keeps the starter script (`return new Response("Hello world")`) and never uploads `dist/`.
+
+Use these Worker build settings:
+
+| Field | Value |
+|--------|--------|
+| **Root directory** | Repo root (empty / `.`) — where `package.json`, `wrangler.toml`, `worker/` live — **not** `dist` |
+| **Build command** | `npm install && npm run export:web` |
+| **Deploy command** | `npx wrangler deploy` — **not** `true` |
+
+For **preview / non-production branches**, Cloudflare may use `npx wrangler versions upload` by default; production **main** should still use a real Wrangler deploy that reads `wrangler.toml`.
+
+- The inline editor may still show “Hello world” until a successful **`wrangler deploy`** replaces the script with `worker/index.js` + assets from the repo.
 - **`name` in `wrangler.toml`** is `mm-app`; change it if your Worker uses a different name in the dashboard.
 
 ### Cloudflare Pages (no Git)
