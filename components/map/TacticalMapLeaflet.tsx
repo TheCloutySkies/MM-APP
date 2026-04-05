@@ -3,13 +3,13 @@ import { useEffect, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 
 import type {
-  MapBaseLayerId,
-  MapFlyToRequest,
-  MapPin,
-  MapPolygonOverlay,
-  MapPolylineOverlay,
-  MapPointerMode,
-  MapUserLocation,
+    MapBaseLayerId,
+    MapFlyToRequest,
+    MapPin,
+    MapPointerMode,
+    MapPolygonOverlay,
+    MapPolylineOverlay,
+    MapUserLocation,
 } from "./mapTypes";
 
 type Props = {
@@ -210,6 +210,19 @@ function TacticalMapLeaflet({
       mapRef.current = null;
       layerRef.current = null;
       tileRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const el = containerRef.current as unknown as HTMLElement | null;
+    if (!map || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      map.invalidateSize();
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
     };
   }, []);
 

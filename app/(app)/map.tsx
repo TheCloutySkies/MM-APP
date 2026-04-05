@@ -1,6 +1,6 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import * as Location from "expo-location";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -53,15 +53,18 @@ import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStor
 
 const MIN_SHEET_H = 56;
 const SHEET_X_CLAMP = 110;
+/** Web + Settings → desktop layout: dock map tools as a right sidebar instead of a bottom sheet. */
+const DESKTOP_MAP_TOOLS_DOCK_MIN_W = 920;
 
 export default function MapScreen() {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
-  const { height: windowH } = useWindowDimensions();
+  const { height: windowH, width: windowW } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
+  const desktopMode = useMMStore((s) => s.desktopMode);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
   const mainKey = useMMStore((s) => s.mainVaultKey);
   const decoyKey = useMMStore((s) => s.decoyVaultKey);
@@ -104,6 +107,9 @@ export default function MapScreen() {
   const [placeQuery, setPlaceQuery] = useState("");
   const [placeHits, setPlaceHits] = useState<GeocodeHit[]>([]);
   const [placeSearching, setPlaceSearching] = useState(false);
+
+  const dockToolsRight = Platform.OS === "web" && desktopMode && windowW >= DESKTOP_MAP_TOOLS_DOCK_MIN_W;
+  const compactToolChips = !dockToolsRight && windowW < 600;
 
   const maxSheetH = Math.min(480, windowH * 0.58);
   const expandedHeightRef = useRef(Math.min(336, maxSheetH * 0.88));
@@ -567,84 +573,44 @@ export default function MapScreen() {
         ? "Save zone"
         : "New map point";
 
-  return (
-    <View style={[styles.screen, { backgroundColor: p.background }]}>
-      <TacticalCategoryModal
-        visible={!!categoryPick}
-        title={categoryModalTitle}
-        scheme={scheme === "dark" ? "dark" : "light"}
-        onClose={() => setCategoryPick(null)}
-        onSelect={(cat) => {
-          if (categoryPick) void saveTacticalFeature(cat, categoryPick);
-        }}
+  const ChipStrip = ({ children }: { children: ReactNode }) =>
+    compactToolChips ? (
+      <View style={styles.chipRowWrap}>{children}</View>
+    ) : (
+      <ScrollView
+        horizontal
+        keyboardShouldPersistTaps="handled"
+        showsHorizontalScrollIndicator={false}
+        style={styles.chipScroll}
+        contentContainerStyle={styles.chipRow}>
+        {children}
+      </ScrollView>
+    );
+
+  const mapNode = (
+    <>
+      <TacticalMap
+        pins={mergedPins}
+        polylines={mapPolylines}
+        polygons={mapPolygons}
+        onLongPress={onMapLongPress}
+        onPress={drawTool === "route" || drawTool === "zone" || pointDropMode ? onMapTap : undefined}
+        flyTo={flyTo}
+        baseLayer={baseLayer}
+        userLocation={userLoc}
+        pointerMode={mapPointerMode}
       />
-      <View style={styles.mapFill}>
-        <TacticalMap
-          pins={mergedPins}
-          polylines={mapPolylines}
-          polygons={mapPolygons}
-          onLongPress={onMapLongPress}
-          onPress={drawTool === "route" || drawTool === "zone" || pointDropMode ? onMapTap : undefined}
-          flyTo={flyTo}
-          baseLayer={baseLayer}
-          userLocation={userLoc}
-          pointerMode={mapPointerMode}
-        />
-        {loading ? (
-          <View style={styles.loader}>
-            <ActivityIndicator color={p.tint} size="large" />
-          </View>
-        ) : null}
-      </View>
-
-      <View
-        style={[
-          styles.sheet,
-          {
-            height: sheetH,
-            backgroundColor: p.background,
-            borderTopColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
-            transform: [{ translateX: sheetOffsetX }],
-          },
-        ]}>
-        <View
-          {...sheetPan.panHandlers}
-          style={[
-            styles.sheetHandleRow,
-            { borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
-          ]}>
-          <Pressable
-            style={styles.sheetHitExpand}
-            onPress={() => {
-              if (sheetExpanded) setSheetH(MIN_SHEET_H);
-              else expandSheet();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={sheetExpanded ? "Minimize map tools" : "Expand map tools"}>
-            <View style={styles.grabber} />
-          </Pressable>
-          <Pressable style={styles.sheetTitleBtn} onPress={() => (sheetExpanded ? setSheetH(MIN_SHEET_H) : expandSheet())}>
-            <Text style={[styles.panelTitle, { color: p.tabIconDefault }]}>Map tools</Text>
-            <FontAwesome name={sheetExpanded ? "chevron-down" : "chevron-up"} size={12} color={p.tabIconDefault} />
-          </Pressable>
-          <Text style={[styles.sheetDragHint, { color: p.tabIconDefault }]}>
-            Drag up · side
-          </Text>
+      {loading ? (
+        <View style={styles.loader}>
+          <ActivityIndicator color={p.tint} size="large" />
         </View>
+      ) : null}
+    </>
+  );
 
-        {sheetExpanded ? (
-          <ScrollView
-            style={styles.sheetBodyScroll}
-            contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom }]}
-            keyboardShouldPersistTaps="handled"
-            nestedScrollEnabled
-            showsVerticalScrollIndicator={false}>
-            <ScrollView
-              horizontal
-              keyboardShouldPersistTaps="handled"
-              showsHorizontalScrollIndicator={false}
-              style={styles.chipScroll}
-              contentContainerStyle={styles.chipRow}>
+  const mapToolsInner = (
+    <>
+            <ChipStrip>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
@@ -738,15 +704,10 @@ export default function MapScreen() {
                   Pin drop {pointDropMode ? "ON" : "off"}
                 </Text>
               </Pressable>
-            </ScrollView>
+            </ChipStrip>
 
             <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass · infrastructure presets</Text>
-            <ScrollView
-              horizontal
-              keyboardShouldPersistTaps="handled"
-              showsHorizontalScrollIndicator={false}
-              style={styles.chipScroll}
-              contentContainerStyle={styles.chipRow}>
+            <ChipStrip>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
@@ -802,19 +763,14 @@ export default function MapScreen() {
                 onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.comm_towers)}>
                 <Text style={[styles.chipLabel, { color: p.text }]}>Comm towers</Text>
               </Pressable>
-            </ScrollView>
+            </ChipStrip>
 
             <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>OSINT layers (SuperMap)</Text>
             <Text style={[styles.drawHint, { color: p.tabIconDefault }]}>
               Toggle sources, then load. Uses map centroid (first tactical pin or default Nevada). Power draws lines +
               substations; USGS and FIRMS are points.
             </Text>
-            <ScrollView
-              horizontal
-              keyboardShouldPersistTaps="handled"
-              showsHorizontalScrollIndicator={false}
-              style={styles.chipScroll}
-              contentContainerStyle={styles.chipRow}>
+            <ChipStrip>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
@@ -862,19 +818,14 @@ export default function MapScreen() {
                 onPress={() => void refreshSupermapLayers()}>
                 <Text style={[styles.chipLabel, { color: p.text }]}>Load OSINT</Text>
               </Pressable>
-            </ScrollView>
+            </ChipStrip>
 
             <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Tactical map</Text>
             <Text style={[styles.drawHint, { color: p.tabIconDefault }]}>
               Long-press to drop a point. Pick a category — everyone sees who placed it. Route / zone: tap the map for
               corners, then Finish and categorize.
             </Text>
-            <ScrollView
-              horizontal
-              keyboardShouldPersistTaps="handled"
-              showsHorizontalScrollIndicator={false}
-              style={styles.chipScroll}
-              contentContainerStyle={styles.chipRow}>
+            <ChipStrip>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
@@ -911,7 +862,7 @@ export default function MapScreen() {
                 onPress={() => setDrawMode("zone")}>
                 <Text style={[styles.chipLabel, { color: p.text }]}>Zone</Text>
               </Pressable>
-            </ScrollView>
+            </ChipStrip>
             {drawTool !== "idle" ? (
               <View style={styles.drawActions}>
                 <Text style={[styles.vertexCount, { color: p.text }]}>
@@ -1049,9 +1000,118 @@ export default function MapScreen() {
           onPress={() => void runCustomIntel()}>
           <Text style={[styles.runBtnLabel, { color: onTintLabel }]}>Run query</Text>
         </Pressable>
-          </ScrollView>
-        ) : null}
-      </View>
+    </>
+  );
+
+  return (
+    <View
+      style={[
+        styles.screen,
+        { backgroundColor: p.background },
+        dockToolsRight && styles.screenDocked,
+        Platform.OS === "web" ? { minHeight: "100%" as never } : null,
+      ]}>
+      <TacticalCategoryModal
+        visible={!!categoryPick}
+        title={categoryModalTitle}
+        scheme={scheme === "dark" ? "dark" : "light"}
+        onClose={() => setCategoryPick(null)}
+        onSelect={(cat) => {
+          if (categoryPick) void saveTacticalFeature(cat, categoryPick);
+        }}
+      />
+      {dockToolsRight ? (
+        <>
+          <View style={styles.mapCol}>
+            <View style={styles.mapFill}>{mapNode}</View>
+          </View>
+          <View
+            style={[
+              styles.toolsDock,
+              {
+                backgroundColor: p.background,
+                borderLeftColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
+                paddingTop: insets.top > 0 ? 8 : 0,
+              },
+            ]}>
+            <View
+              style={[
+                styles.toolsDockHead,
+                { borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
+              ]}>
+              <Text style={[styles.panelTitle, { color: p.tabIconDefault }]}>Map tools</Text>
+              <Text style={[styles.toolsDockHint, { color: p.tabIconDefault }]}>
+                Desktop sidebar · turn off in Settings
+              </Text>
+            </View>
+            <ScrollView
+              style={styles.toolsDockScroll}
+              contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom + 8 }]}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+              showsVerticalScrollIndicator>
+              {mapToolsInner}
+            </ScrollView>
+          </View>
+        </>
+      ) : (
+        <>
+          <View style={styles.mapFill}>{mapNode}</View>
+
+          <View
+            style={[
+              styles.sheet,
+              {
+                height: sheetH,
+                backgroundColor: p.background,
+                borderTopColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
+                transform: [{ translateX: sheetOffsetX }],
+              },
+            ]}>
+            <View
+              {...sheetPan.panHandlers}
+              style={[
+                styles.sheetHandleRow,
+                { borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
+              ]}>
+              <Pressable
+                style={styles.sheetHitExpand}
+                onPress={() => {
+                  if (sheetExpanded) setSheetH(MIN_SHEET_H);
+                  else expandSheet();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={sheetExpanded ? "Minimize map tools" : "Expand map tools"}>
+                <View style={styles.grabber} />
+              </Pressable>
+              <Pressable
+                style={styles.sheetTitleBtn}
+                onPress={() => (sheetExpanded ? setSheetH(MIN_SHEET_H) : expandSheet())}>
+                <Text style={[styles.panelTitle, { color: p.tabIconDefault }]}>Map tools</Text>
+                <FontAwesome
+                  name={sheetExpanded ? "chevron-down" : "chevron-up"}
+                  size={12}
+                  color={p.tabIconDefault}
+                />
+              </Pressable>
+              <Text style={[styles.sheetDragHint, { color: p.tabIconDefault }]}>
+                {compactToolChips ? "Swipe up · chips wrap on phone" : "Drag up · side"}
+              </Text>
+            </View>
+
+            {sheetExpanded ? (
+              <ScrollView
+                style={styles.sheetBodyScroll}
+                contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom }]}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}>
+                {mapToolsInner}
+              </ScrollView>
+            ) : null}
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -1059,10 +1119,56 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
+    minHeight: 0,
   },
-  /** Full-bleed map; tools float above so minimizing the sheet frees the whole viewport. */
+  screenDocked: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  mapCol: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+  },
+  /** Map fills the column; bottom sheet overlays on mobile, sidebar sits beside on desktop dock. */
   mapFill: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
+    minHeight: 0,
+    width: "100%",
+  },
+  toolsDock: {
+    width: 372,
+    maxWidth: "40%",
+    flexShrink: 0,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    ...(Platform.OS === "web"
+      ? { boxShadow: "-4px 0 18px rgba(0,0,0,0.18)" }
+      : { elevation: 10 }),
+  },
+  toolsDockHead: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 4,
+  },
+  toolsDockHint: {
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+    opacity: 0.65,
+  },
+  toolsDockScroll: {
+    flex: 1,
+    minHeight: 0,
+    paddingHorizontal: 14,
+  },
+  chipRowWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 4,
+    marginHorizontal: -2,
   },
   loader: {
     ...StyleSheet.absoluteFillObject,

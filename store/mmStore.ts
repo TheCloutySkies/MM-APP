@@ -1,6 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { create } from "zustand";
 
+import {
+    MAIN_TAB_ROUTE_ORDER,
+    type MainTabRouteId,
+    normalizeTabOrder,
+    reorderTabBefore,
+} from "@/constants/mainTabs";
 import type { VisualThemeId } from "@/constants/TacticalTheme";
 import * as aes from "@/lib/crypto/aesGcm";
 import { hexToBytes, utf8 } from "@/lib/crypto/bytes";
@@ -34,6 +40,8 @@ type MMState = {
   desktopMode: boolean;
   vaultDriveViewMode: VaultDriveViewMode;
   visualTheme: VisualThemeId;
+  /** User-defined order for main tab rail (home, vault, map, …). */
+  tabBarOrder: MainTabRouteId[];
 };
 
 type MMActions = {
@@ -67,6 +75,9 @@ type MMActions = {
   setVaultDriveViewMode: (v: VaultDriveViewMode) => Promise<void>;
   /** Re-read mm_profiles.username + callsign_ok (after callsign save or remote change). */
   syncMmProfileRow: () => Promise<void>;
+  setTabBarOrder: (order: MainTabRouteId[]) => Promise<void>;
+  /** Move one main tab to sit immediately before another (for drag reorder). */
+  reorderMainTabs: (dragged: MainTabRouteId, beforeId: MainTabRouteId) => Promise<void>;
 };
 
 async function persistSession(token: string, profileId: string, username: string) {
@@ -111,6 +122,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   desktopMode: false,
   vaultDriveViewMode: "list",
   visualTheme: "woodland",
+  tabBarOrder: [...MAIN_TAB_ROUTE_ORDER],
 
   setSupabaseClient: (c) => set({ supabase: c }),
 
@@ -131,6 +143,8 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     const vaultDriveViewMode: VaultDriveViewMode = vmode === "grid" ? "grid" : "list";
     const vt = (await secureGet(SK.visualTheme)) as VisualThemeId | null;
     const visualTheme: VisualThemeId = vt === "nightops" ? "nightops" : "woodland";
+
+    const tabBarOrder = normalizeTabOrder(await secureGet(SK.tabBarOrder));
 
     let token: string | null = null;
     let profileId: string | null = null;
@@ -189,6 +203,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       desktopMode,
       vaultDriveViewMode,
       visualTheme,
+      tabBarOrder,
     });
   },
 
@@ -210,6 +225,18 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   setDesktopMode: async (v) => {
     await secureSet(SK.desktopMode, v ? "1" : "0");
     set({ desktopMode: v });
+  },
+
+  setTabBarOrder: async (order) => {
+    const normalized = normalizeTabOrder(JSON.stringify(order));
+    await secureSet(SK.tabBarOrder, JSON.stringify(normalized));
+    set({ tabBarOrder: normalized });
+  },
+
+  reorderMainTabs: async (dragged, beforeId) => {
+    const cur = get().tabBarOrder;
+    const next = reorderTabBefore(cur, dragged, beforeId);
+    await get().setTabBarOrder(next);
   },
 
   login: async (loginToken, profileId, username, source: SessionSource = "legacy") => {

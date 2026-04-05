@@ -6,22 +6,32 @@ import { useWindowDimensions } from "react-native";
 import { GoodPalantirWindow } from "@/components/GoodPalantirWindow";
 import { PanicButton } from "@/components/PanicButton";
 import { TacticalCard } from "@/components/TacticalCard";
+import type { MainTabRouteId } from "@/constants/mainTabs";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useMMStore } from "@/store/mmStore";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export default function HomeScreen() {
   const username = useMMStore((s) => s.username);
+  const tabBarOrder = useMMStore((s) => s.tabBarOrder);
+  const reorderMainTabs = useMMStore((s) => s.reorderMainTabs);
   const [palantirOpen, setPalantirOpen] = useState(false);
   const { width } = useWindowDimensions();
-  const isWide = width >= 720;
   const gap = 12;
-  const cardBasis = isWide ? (width - 48 - gap) / 2 : width - 32;
+  const contentMax = 960;
+  const gridInner = Math.min(width, contentMax) - 32;
+  const cols = width >= 1180 ? 4 : width >= 840 ? 3 : 2;
+  const cardBasis = Math.max(140, (gridInner - gap * (cols - 1)) / cols);
+
+  const pinModuleTab = (id: MainTabRouteId) => {
+    const head = tabBarOrder[0];
+    void reorderMainTabs(id, head);
+  };
 
   return (
     <ScrollView
       style={styles.scroll}
-      contentContainerStyle={[styles.content, isWide && styles.contentWide]}>
+      contentContainerStyle={[styles.content, width >= 720 && styles.contentWide]}>
       <GoodPalantirWindow visible={palantirOpen} onClose={() => setPalantirOpen(false)} />
       <View style={styles.topTools}>
         <PanicButton variant="compact" />
@@ -37,26 +47,45 @@ export default function HomeScreen() {
         <Text style={styles.sub}>
           {username ? `Signed in as ${username}` : "Secure session"} — choose a module.
         </Text>
+        <Text style={styles.hubHint}>
+          Web: drag a highlighted module onto the tab rail to reorder it (drop on a tab or empty rail). Long-press the same
+          cards on mobile to pin that tab to the top of the rail.
+        </Text>
       </View>
 
-      <View style={[styles.grid, isWide && styles.gridWide]}>
-        <View style={{ width: cardBasis }}>
+      <View style={styles.grid}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Vault"
             subtitle="Encrypted drive — files and ops docs"
+            detail="Files are encrypted on your device before upload (AES-GCM), and Supabase row-level security limits reads to your own account — we never see plaintext vault contents."
             href="/(app)/vault"
+            tabBarDragId="vault"
+            onPinToTabBar={() => pinModuleTab("vault")}
             icon={<FontAwesome name="lock" size={24} color={TacticalPalette.accent} />}
           />
         </View>
-        <View style={{ width: cardBasis }}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Map & OSINT"
             subtitle="Tactical map, intel layers, E2EE pins"
             href="/(app)/map"
+            tabBarDragId="map"
+            onPinToTabBar={() => pinModuleTab("map")}
             icon={<FontAwesome name="map" size={24} color={TacticalPalette.accent} />}
           />
         </View>
-        <View style={{ width: cardBasis }}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
+          <TacticalCard
+            title="Reports"
+            subtitle="SITREP, AAR, target pkg, intel (rail tab)"
+            href="/(app)/reports"
+            tabBarDragId="reports"
+            onPinToTabBar={() => pinModuleTab("reports")}
+            icon={<FontAwesome name="file-text" size={24} color={TacticalPalette.accent} />}
+          />
+        </View>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Forensics"
             subtitle="Metadata, integrity, media scrub"
@@ -64,23 +93,27 @@ export default function HomeScreen() {
             icon={<FontAwesome name="search" size={24} color={TacticalPalette.accent} />}
           />
         </View>
-        <View style={{ width: cardBasis }}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Missions"
             subtitle="Time-locked folders and reports"
             href="/(app)/missions"
+            tabBarDragId="missions"
+            onPinToTabBar={() => pinModuleTab("missions")}
             icon={<FontAwesome name="folder" size={24} color={TacticalPalette.accent} />}
           />
         </View>
-        <View style={{ width: cardBasis }}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Settings"
             subtitle="Security, panic, desktop layout"
             href="/(app)/settings"
+            tabBarDragId="settings"
+            onPinToTabBar={() => pinModuleTab("settings")}
             icon={<FontAwesome name="cog" size={24} color={TacticalPalette.accent} />}
           />
         </View>
-        <View style={{ width: cardBasis }}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Good Palantir"
             subtitle="Floating embed on web · launch external if host blocks iframes"
@@ -88,7 +121,7 @@ export default function HomeScreen() {
             icon={<FontAwesome name="globe" size={24} color={TacticalPalette.coyote} />}
           />
         </View>
-        <View style={{ width: cardBasis }}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Bulletin"
             subtitle="Encrypted team announcements"
@@ -96,7 +129,7 @@ export default function HomeScreen() {
             icon={<FontAwesome name="bullhorn" size={24} color={TacticalPalette.accent} />}
           />
         </View>
-        <View style={{ width: cardBasis }}>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Gear / logistics"
             subtitle="Line 1–3 loadouts (E2EE)"
@@ -152,15 +185,18 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 20,
   },
-  grid: {
-    flexDirection: "column",
-    gap: 12,
-    alignItems: "stretch",
+  hubHint: {
+    color: TacticalPalette.coyote,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 12,
+    opacity: 0.95,
   },
-  gridWide: {
+  grid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "flex-start",
     gap: 12,
+    alignItems: "stretch",
   },
 });

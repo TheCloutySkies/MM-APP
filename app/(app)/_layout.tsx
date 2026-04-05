@@ -3,6 +3,7 @@ import { Tabs } from "expo-router";
 import type { ComponentProps } from "react";
 import { Platform, StyleSheet } from "react-native";
 
+import { MMTabBar } from "@/components/navigation/MMTabBar";
 import { ScorchedEarthListener } from "@/components/ScorchedEarthListener";
 import { useDeadManMonitor } from "@/hooks/useDeadManMonitor";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
@@ -23,6 +24,7 @@ export default function AppLayout() {
     <>
       <ScorchedEarthListener />
       <Tabs
+        tabBar={(props) => <MMTabBar {...props} />}
         screenOptions={{
           tabBarActiveTintColor: theme.tint,
           tabBarInactiveTintColor: theme.tabIconDefault,
@@ -95,6 +97,13 @@ export default function AppLayout() {
           options={{
             title: "Map",
             tabBarIcon: ({ color }) => <TabIcon name="map" color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="reports"
+          options={{
+            title: "Reports",
+            tabBarIcon: ({ color }) => <TabIcon name="file-text" color={color} />,
           }}
         />
         <Tabs.Screen

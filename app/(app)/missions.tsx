@@ -2,31 +2,27 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
     Alert,
-    FlatList,
     Pressable,
+    ScrollView,
     StyleSheet,
     Text,
     View,
     useColorScheme,
 } from "react-native";
 
-import { AarModal } from "@/components/ops/AarModal";
-import { IntelReportModal } from "@/components/ops/IntelReportModal";
 import { MissionPlanModal } from "@/components/ops/MissionPlanModal";
 import { OperationHubModal } from "@/components/ops/OperationHubModal";
-import { SitrepModal } from "@/components/ops/SitrepModal";
-import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8 } from "@/lib/crypto/aesGcm";
 import {
-  OPERATION_HUB_AAD,
-  OPS_AAD,
-  formatMissionForDisplay,
-  previewOpsRow,
-  type MissionPlanPayloadV1,
-  type OperationHubPayloadV1,
-  type OpsDocKind,
+    OPERATION_HUB_AAD,
+    OPS_AAD,
+    formatMissionForDisplay,
+    previewOpsRow,
+    type MissionPlanPayloadV1,
+    type OperationHubPayloadV1,
+    type OpsDocKind,
 } from "@/lib/opsReports";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
@@ -86,11 +82,7 @@ export default function MissionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const [showMissionModal, setShowMissionModal] = useState(false);
-  const [showSitrepModal, setShowSitrepModal] = useState(false);
-  const [showAarModal, setShowAarModal] = useState(false);
   const [showOpHubModal, setShowOpHubModal] = useState(false);
-  const [showTargetModal, setShowTargetModal] = useState(false);
-  const [showIntelModal, setShowIntelModal] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!supabase) return;
@@ -186,71 +178,42 @@ export default function MissionsScreen() {
 
   return (
     <View style={[styles.wrap, { backgroundColor: p.background }]}>
-      <Text style={[styles.lede, { color: p.tabIconDefault }]}>
-        Doctrine-style mission planning and reporting. Team plans, SITREPs, and AARs use the same encryption key as shared
-        map markers when EXPO_PUBLIC_MM_MAP_SHARED_KEY is set (32-byte hex). See docs/mm-member-callsigns-example.md for
-        sample callsigns.
-      </Text>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        <Text style={[styles.lede, { color: p.tabIconDefault }]}>
+          Doctrine-style mission planning. Create an operation first — that becomes the dashboard shell where mission plans
+          roll up; file field reports from the <Text style={{ fontWeight: "800" }}>Reports</Text> tab or inside an operation
+          hub. Team crypto matches shared map markers when EXPO_PUBLIC_MM_MAP_SHARED_KEY is set (32-byte hex).
+        </Text>
 
-      <View style={styles.actions}>
+        <Text style={[styles.section, { color: p.tabIconDefault }]}>New operation</Text>
         <Pressable
-          style={[styles.actionBtn, { backgroundColor: p.tint }]}
-          onPress={() => {
-            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable. Unlock vault or set shared map key.");
-            else setShowMissionModal(true);
-          }}>
-          <Text style={[styles.actionBtnTx, { color: sch === "dark" ? "#0f172a" : "#fff" }]}>Mission plan</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.actionBtn, { borderColor: p.tint, borderWidth: 1, backgroundColor: "transparent" }]}
-          onPress={() => {
-            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
-            else setShowSitrepModal(true);
-          }}>
-          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>SITREP</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.actionBtn, { borderColor: p.tint, borderWidth: 1, backgroundColor: "transparent" }]}
-          onPress={() => {
-            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
-            else setShowAarModal(true);
-          }}>
-          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>AAR</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.actionBtn, { borderColor: p.tint, borderWidth: 1, backgroundColor: "transparent" }]}
-          onPress={() => {
-            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
-            else setShowTargetModal(true);
-          }}>
-          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>Target pkg</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.actionBtn, { borderColor: p.tint, borderWidth: 1, backgroundColor: "transparent" }]}
-          onPress={() => {
-            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
-            else setShowIntelModal(true);
-          }}>
-          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>Intel</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.actionBtn, { backgroundColor: TacticalPalette.elevated, borderWidth: 1, borderColor: p.tint }]}
+          style={[styles.actionBtnPrimary, { backgroundColor: p.tint }]}
           onPress={() => {
             if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
             else setShowOpHubModal(true);
           }}>
-          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>New operation</Text>
+          <Text style={[styles.actionBtnTx, { color: sch === "dark" ? "#0f172a" : "#fff" }]}>Create operation hub</Text>
         </Pressable>
-      </View>
 
-      <Text style={[styles.section, { color: p.tabIconDefault }]}>Operations (scoped reports)</Text>
-      <FlatList
-        data={hubs}
-        keyExtractor={(r) => r.id}
-        scrollEnabled={false}
-        style={{ maxHeight: 220 }}
-        ListEmptyComponent={<Text style={{ color: p.tabIconDefault, marginBottom: 8 }}>No operation hubs yet.</Text>}
-        renderItem={({ item }) => {
+        <Text style={[styles.section, { color: p.tabIconDefault, marginTop: 18 }]}>Mission plan</Text>
+        <Text style={[styles.hint, { color: p.tabIconDefault }]}>
+          Lock the operational picture inside an operation (open a hub from the list). Plans you save here can be opened
+          from that hub’s dashboard next.
+        </Text>
+        <Pressable
+          style={[styles.actionBtnPrimary, { backgroundColor: TacticalPalette.elevated, borderWidth: 1, borderColor: p.tint }]}
+          onPress={() => {
+            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable. Unlock vault or set shared map key.");
+            else setShowMissionModal(true);
+          }}>
+          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>New mission plan</Text>
+        </Pressable>
+
+        <Text style={[styles.section, { color: p.tabIconDefault }]}>Operations (dashboard)</Text>
+        {hubs.length === 0 ? (
+          <Text style={{ color: p.tabIconDefault, marginBottom: 8 }}>No operation hubs yet.</Text>
+        ) : null}
+        {hubs.map((item) => {
           let title = "Operation";
           if (mapKey?.length === 32) {
             try {
@@ -262,6 +225,7 @@ export default function MissionsScreen() {
           }
           return (
             <Pressable
+              key={item.id}
               style={[styles.card, { borderColor: p.tabIconDefault, marginBottom: 8 }]}
               onPress={() =>
                 router.push({
@@ -275,22 +239,13 @@ export default function MissionsScreen() {
               </Text>
             </Pressable>
           );
-        }}
-      />
+        })}
 
-      <Text style={[styles.section, { color: p.tabIconDefault }]}>Mission plans (team + legacy)</Text>
-      <FlatList
-        style={{ flex: 1 }}
-        data={combined}
-        keyExtractor={(r) => `${r.source}-${r.id}`}
-        onRefresh={async () => {
-          setRefreshing(true);
-          await refresh();
-          setRefreshing(false);
-        }}
-        refreshing={refreshing}
-        ListEmptyComponent={<Text style={{ color: p.tabIconDefault }}>No mission plans yet.</Text>}
-        renderItem={({ item }) => {
+        <Text style={[styles.section, { color: p.tabIconDefault }]}>Mission plans (team + legacy)</Text>
+        {combined.length === 0 ? (
+          <Text style={{ color: p.tabIconDefault }}>No mission plans yet.</Text>
+        ) : null}
+        {combined.map((item) => {
           let title = "…";
           let sub = item.created_at;
           if (item.source === "ops") {
@@ -314,38 +269,29 @@ export default function MissionsScreen() {
           }
           return (
             <Pressable
+              key={`${item.source}-${item.id}`}
               style={[styles.card, { borderColor: p.tabIconDefault }]}
               onPress={() => openRow(item)}>
               <Text style={{ color: p.text, fontWeight: "700" }}>{title}</Text>
               <Text style={{ color: p.tabIconDefault, fontSize: 12 }}>{sub}</Text>
             </Pressable>
           );
-        }}
-      />
+        })}
+
+        <Pressable
+          style={[styles.refreshLink, { borderColor: p.tabIconDefault }]}
+          onPress={async () => {
+            setRefreshing(true);
+            await refresh();
+            setRefreshing(false);
+          }}>
+          <Text style={{ color: p.tint, fontWeight: "700" }}>{refreshing ? "Refreshing…" : "Refresh lists"}</Text>
+        </Pressable>
+      </ScrollView>
 
       <MissionPlanModal
         visible={showMissionModal}
         onClose={() => setShowMissionModal(false)}
-        scheme={sch}
-        supabase={supabase}
-        profileId={profileId}
-        username={username}
-        mapKey={mapKey}
-        onSaved={() => void refresh()}
-      />
-      <SitrepModal
-        visible={showSitrepModal}
-        onClose={() => setShowSitrepModal(false)}
-        scheme={sch}
-        supabase={supabase}
-        profileId={profileId}
-        username={username}
-        mapKey={mapKey}
-        onSaved={() => void refresh()}
-      />
-      <AarModal
-        visible={showAarModal}
-        onClose={() => setShowAarModal(false)}
         scheme={sch}
         supabase={supabase}
         profileId={profileId}
@@ -363,43 +309,31 @@ export default function MissionsScreen() {
         mapKey={mapKey}
         onSaved={() => void refresh()}
       />
-      <TargetPackageModal
-        visible={showTargetModal}
-        onClose={() => setShowTargetModal(false)}
-        scheme={sch}
-        supabase={supabase}
-        profileId={profileId}
-        username={username}
-        mapKey={mapKey}
-        onSaved={() => void refresh()}
-      />
-      <IntelReportModal
-        visible={showIntelModal}
-        onClose={() => setShowIntelModal(false)}
-        scheme={sch}
-        supabase={supabase}
-        profileId={profileId}
-        username={username}
-        mapKey={mapKey}
-        onSaved={() => void refresh()}
-      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, padding: 16 },
+  wrap: { flex: 1 },
+  scroll: { flex: 1 },
+  scrollContent: { padding: 16, paddingBottom: 32 },
   lede: { fontSize: 12, lineHeight: 17, marginBottom: 16 },
-  actions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 16 },
-  actionBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+  hint: { fontSize: 12, lineHeight: 17, marginBottom: 10, opacity: 0.9 },
+  actionBtnPrimary: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderRadius: 10,
-    minWidth: 100,
     alignItems: "center",
   },
   actionBtnTx: { fontWeight: "800", fontSize: 14 },
   actionBtnTxOutline: { fontWeight: "800", fontSize: 14 },
+  refreshLink: {
+    marginTop: 20,
+    alignSelf: "flex-start",
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   section: {
     fontSize: 11,
     fontWeight: "700",

@@ -18,6 +18,7 @@ import {
 import { DistressWebhookCard } from "@/components/settings/DistressWebhookCard";
 import { SettingsSection } from "@/components/settings/SettingsSection";
 import Colors from "@/constants/Colors";
+import { MAIN_TAB_LABEL, MAIN_TAB_ROUTE_ORDER } from "@/constants/mainTabs";
 import { deriveKeyArgon2id } from "@/lib/crypto/kdf";
 import { buildEncryptedVaultExport, copyExportToClipboard } from "@/lib/p2p/exportVault";
 import { useMMStore } from "@/store/mmStore";
@@ -33,6 +34,8 @@ export default function SettingsScreen() {
   const logout = useMMStore((s) => s.logout);
   const lock = useMMStore((s) => s.lock);
   const fullLock = useMMStore((s) => s.fullLock);
+  const tabBarOrder = useMMStore((s) => s.tabBarOrder);
+  const setTabBarOrder = useMMStore((s) => s.setTabBarOrder);
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
@@ -96,6 +99,14 @@ export default function SettingsScreen() {
     await Linking.openURL(`sms:?&body=${encodeURIComponent(body)}`);
   };
 
+  const moveTab = (index: number, dir: -1 | 1) => {
+    const j = index + dir;
+    if (j < 0 || j >= tabBarOrder.length) return;
+    const next = [...tabBarOrder];
+    [next[index], next[j]] = [next[j]!, next[index]!];
+    void setTabBarOrder(next);
+  };
+
   const runExport = async () => {
     if (!supabase || !profileId || exportPhrase.length < 8) {
       Alert.alert("Export", "Enter an export passphrase (8+ chars).");
@@ -145,6 +156,52 @@ export default function SettingsScreen() {
           </View>
         </SettingsSection>
       ) : null}
+
+      <SettingsSection
+        title="Navigation rail"
+        subtitle="Reorder main tabs. On web, drag icons on the rail or drop Home modules onto the rail; long-press those cards on mobile to pin.">
+        {tabBarOrder.map((id, i) => (
+          <View
+            key={id}
+            style={[
+              styles.rowCard,
+              { borderColor: p.tabIconDefault, marginBottom: 10, justifyContent: "space-between" },
+            ]}>
+            <Text style={[styles.rowLabel, { color: p.text }]}>{MAIN_TAB_LABEL[id]}</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Pressable
+                onPress={() => moveTab(i, -1)}
+                disabled={i === 0}
+                style={({ pressed }) => [
+                  styles.tabOrderBtn,
+                  { borderColor: p.tabIconDefault, opacity: i === 0 ? 0.35 : pressed ? 0.82 : 1 },
+                ]}>
+                <Text style={{ color: p.text, fontWeight: "800" }}>↑</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => moveTab(i, 1)}
+                disabled={i === tabBarOrder.length - 1}
+                style={({ pressed }) => [
+                  styles.tabOrderBtn,
+                  {
+                    borderColor: p.tabIconDefault,
+                    opacity: i === tabBarOrder.length - 1 ? 0.35 : pressed ? 0.82 : 1,
+                  },
+                ]}>
+                <Text style={{ color: p.text, fontWeight: "800" }}>↓</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+        <Pressable
+          style={({ pressed }) => [
+            styles.secondaryBtn,
+            { borderColor: p.tint, opacity: pressed ? 0.88 : 1, marginTop: 4 },
+          ]}
+          onPress={() => void setTabBarOrder([...MAIN_TAB_ROUTE_ORDER])}>
+          <Text style={[styles.secondaryBtnText, { color: p.text }]}>Reset tab order</Text>
+        </Pressable>
+      </SettingsSection>
 
       <SettingsSection
         title="Emergency & distress"
@@ -268,6 +325,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   rowLabel: { fontSize: 16, flex: 1, paddingRight: 12 },
+  tabOrderBtn: {
+    minWidth: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   input: { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 16 },
   primaryBtn: { borderRadius: 12, paddingVertical: 15, alignItems: "center" },
   primaryBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },

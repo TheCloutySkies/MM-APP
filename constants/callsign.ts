@@ -24,7 +24,7 @@ export const CALLSIGN_SUGGESTIONS = [
 ] as const;
 
 export const CALLSIGN_GUIDANCE =
-  "Do not use your real name. Pick a NATO-style handle (two words from the alphabet, lower kebab-case) or a short codename. This is how you appear in MM — think callsign, not ID.";
+  "Use a previously assigned callsign or a NATO-alphabet-style callsign. Don't be stupid and use your real name.";
 
 export function normalizeCallsignInput(raw: string): string {
   return raw

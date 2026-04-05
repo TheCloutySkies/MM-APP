@@ -69,6 +69,8 @@ export const SK = {
   vaultDriveViewMode: "mm_vault_drive_view",
   /** "woodland" | "nightops" — tactical chrome variant */
   visualTheme: "mm_visual_theme",
+  /** JSON string[] — main tab route names (home, vault, …) */
+  tabBarOrder: "mm_tab_bar_order",
 } as const;
 
 /** Clear MM session tokens only (crypto setup on device preserved). */
