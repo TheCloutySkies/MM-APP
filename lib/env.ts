@@ -1,5 +1,4 @@
 import Constants from "expo-constants";
-import { Platform } from "react-native";
 
 type ExpoPublicPayload = {
   EXPO_PUBLIC_SUPABASE_URL?: string;
@@ -11,9 +10,22 @@ type ExpoPublicPayload = {
   EXPO_PUBLIC_MM_GEO_PROXY_URL?: string;
 };
 
+/** Cloudflare Worker injects this on HTML responses (see worker/index.js). Do not gate on Platform.OS — RN Web can differ from browser during early loads. */
+function getInjectedExpoPublic(): ExpoPublicPayload | undefined {
+  if (typeof globalThis === "undefined") return undefined;
+  const g = globalThis as typeof globalThis & {
+    __MM_EXPO_PUBLIC__?: ExpoPublicPayload;
+    window?: Window & { __MM_EXPO_PUBLIC__?: ExpoPublicPayload };
+  };
+  if (g.__MM_EXPO_PUBLIC__) return g.__MM_EXPO_PUBLIC__;
+  if (typeof g.window !== "undefined" && g.window?.__MM_EXPO_PUBLIC__) {
+    return g.window.__MM_EXPO_PUBLIC__;
+  }
+  return undefined;
+}
+
 function readWebInjected(key: keyof ExpoPublicPayload): string | undefined {
-  if (Platform.OS !== "web" || typeof window === "undefined") return undefined;
-  const inj = (window as Window & { __MM_EXPO_PUBLIC__?: ExpoPublicPayload }).__MM_EXPO_PUBLIC__;
+  const inj = getInjectedExpoPublic();
   const v = inj?.[key];
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined;
 }

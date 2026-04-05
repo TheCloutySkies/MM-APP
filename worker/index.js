@@ -1,7 +1,7 @@
 /**
  * Serves Expo static export from ./dist (wrangler.toml [assets]).
- * Injects window.__MM_EXPO_PUBLIC__ into HTML so the client bundle gets Supabase URL/key
- * from Cloudflare Worker vars — static export does not read your laptop's .env.
+ * Injects globalThis.__MM_EXPO_PUBLIC__ / window.__MM_EXPO_PUBLIC__ at the *start* of <head>
+ * so config exists before any Expo/RN scripts run.
  *
  * Set EXPO_PUBLIC_* in wrangler.toml [vars] or Dashboard → Workers → Settings → Variables.
  */
@@ -24,10 +24,14 @@ export default {
       EXPO_PUBLIC_SUPERMAP_API_URL: env.EXPO_PUBLIC_SUPERMAP_API_URL ?? "",
       EXPO_PUBLIC_MM_GEO_PROXY_URL: env.EXPO_PUBLIC_MM_GEO_PROXY_URL ?? "",
     };
-    const script = `<script>window.__MM_EXPO_PUBLIC__=${JSON.stringify(payload)};<\/script>`;
+
+    const json = JSON.stringify(payload).replace(/</g, "\\u003c");
+    const script = `<script>(function(){var p=${json};try{globalThis.__MM_EXPO_PUBLIC__=p;}catch(e){}if(typeof window!=="undefined")window.__MM_EXPO_PUBLIC__=p;})();<\/script>`;
 
     let html = await res.text();
-    if (html.includes("</head>")) {
+    if (/<head[^>]*>/i.test(html)) {
+      html = html.replace(/<head[^>]*>/i, (m) => `${m}${script}`);
+    } else if (html.includes("</head>")) {
       html = html.replace("</head>", `${script}</head>`);
     } else {
       html = `${script}${html}`;
