@@ -26,6 +26,7 @@ type Props = {
   username: string | null;
   mapKey: Uint8Array | null;
   onSaved: () => void;
+  operationId?: string | null;
 };
 
 export function AarModal({
@@ -37,6 +38,7 @@ export function AarModal({
   username,
   mapKey,
   onSaved,
+  operationId = null,
 }: Props) {
   const p = Colors[scheme];
   const [operationTitle, setOperationTitle] = useState("");
@@ -93,6 +95,7 @@ export function AarModal({
         author_username: preparedBy,
         doc_kind: "aar",
         encrypted_payload: encrypted,
+        ...(operationId ? { operation_id: operationId } : {}),
       });
       if (error) throw new Error(error.message);
       onSaved();

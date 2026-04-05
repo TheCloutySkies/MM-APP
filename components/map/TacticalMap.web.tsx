@@ -2,7 +2,15 @@ import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
-import type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay } from "./mapTypes";
+import type {
+  MapBaseLayerId,
+  MapFlyToRequest,
+  MapPin,
+  MapPolygonOverlay,
+  MapPolylineOverlay,
+  MapPointerMode,
+  MapUserLocation,
+} from "./mapTypes";
 
 export type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay };
 
@@ -13,6 +21,9 @@ type Props = {
   onLongPress?: (lat: number, lng: number) => void;
   onPress?: (lat: number, lng: number) => void;
   flyTo?: MapFlyToRequest | null;
+  baseLayer?: MapBaseLayerId;
+  userLocation?: MapUserLocation | null;
+  pointerMode?: MapPointerMode;
 };
 
 /**

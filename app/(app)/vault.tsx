@@ -4,40 +4,50 @@ import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
 import {
-  Alert,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-  useColorScheme,
+    Alert,
+    FlatList,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+    useColorScheme,
+    useWindowDimensions,
 } from "react-native";
 
+import { PanicButton } from "@/components/PanicButton";
 import Colors from "@/constants/Colors";
-import { aes256GcmDecrypt, aes256GcmEncrypt, decryptUtf8, type AeadBundle } from "@/lib/crypto/aesGcm";
+import { TacticalPalette } from "@/constants/TacticalTheme";
+import { aes256GcmDecrypt, aes256GcmEncrypt, decryptUtf8, encryptUtf8, type AeadBundle } from "@/lib/crypto/aesGcm";
 import { utf8, utf8decode } from "@/lib/crypto/bytes";
 import { runCloutVisionPipeline } from "@/lib/media/cloutVision";
 import {
-  OPS_AAD,
-  formatAarForDisplay,
-  formatMissionForDisplay,
-  formatSitrepForDisplay,
-  previewOpsRow,
-  type AarPayloadV1,
-  type MissionPlanPayloadV1,
-  type OpsDocKind,
-  type SitrepPayloadV1,
+    OPS_AAD,
+    VAULT_FOLDER_NAME_AAD,
+    formatAarForDisplay,
+    formatIntelReportForDisplay,
+    formatMissionForDisplay,
+    formatSitrepForDisplay,
+    formatTargetPackageForDisplay,
+    previewOpsRow,
+    type AarPayloadV1,
+    type IntelReportPayloadV1,
+    type MissionPlanPayloadV1,
+    type OpsDocKind,
+    type SitrepPayloadV1,
+    type TargetPackagePayloadV1,
 } from "@/lib/opsReports";
 import {
-  formatOpsVaultHeadline,
-  formatVaultListDate,
-  vaultItemDisplayName,
+    formatOpsVaultHeadline,
+    formatVaultListDate,
+    vaultItemDisplayName,
 } from "@/lib/vaultNaming";
 import { resolveMapEncryptKey, useMMStore } from "@/store/mmStore";
 
-type VaultObjectRow = { id: string; storage_path: string; created_at: string };
+type VaultObjectRow = { id: string; storage_path: string; created_at: string; folder_id: string | null };
+
+type VaultFolderRow = { id: string; parent_id: string | null; encrypted_name: string; created_by: string };
 
 type OpsReportRow = {
   id: string;
@@ -48,8 +58,6 @@ type OpsReportRow = {
 };
 
 type VaultSection = "private" | OpsDocKind;
-
-type ViewMode = "list" | "grid";
 
 function useActiveVaultKey() {
   const mode = useMMStore((s) => s.vaultMode);
@@ -93,6 +101,8 @@ function sectionIcon(s: VaultSection): ComponentProps<typeof FontAwesome>["name"
 export default function VaultScreen() {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
+  const { width: windowW } = useWindowDimensions();
+  const isWideLayout = windowW >= 720;
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const vaultMode = useMMStore((s) => s.vaultMode);
@@ -111,26 +121,69 @@ export default function VaultScreen() {
 
   const [section, setSection] = useState<VaultSection>("private");
   const [rows, setRows] = useState<VaultObjectRow[]>([]);
+  const [folders, setFolders] = useState<VaultFolderRow[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [newFolderName, setNewFolderName] = useState("");
   const [opsRows, setOpsRows] = useState<OpsReportRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const viewMode = useMMStore((s) => s.vaultDriveViewMode);
+  const setVaultDriveViewMode = useMMStore((s) => s.setVaultDriveViewMode);
 
   const prefix = vaultMode ?? "main";
+
+  const refreshFolders = useCallback(async () => {
+    if (!supabase) return;
+    const { data, error } = await supabase
+      .from("vault_folders")
+      .select("id, parent_id, encrypted_name, created_by")
+      .order("created_at", { ascending: true });
+    if (error) {
+      console.warn(error.message);
+      setFolders([]);
+      return;
+    }
+    setFolders((data ?? []) as VaultFolderRow[]);
+  }, [supabase]);
 
   const refreshPrivate = useCallback(async () => {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("vault_objects")
-      .select("id, storage_path, created_at")
+      .select("id, storage_path, created_at, folder_id")
       .order("created_at", { ascending: false });
     if (error) {
       Alert.alert("Vault list", error.message);
       return;
     }
     setRows((data ?? []) as VaultObjectRow[]);
-  }, [supabase]);
+    await refreshFolders();
+  }, [supabase, refreshFolders]);
+
+  const createFolder = async () => {
+    if (!supabase || !profileId || !mapKey || mapKey.length !== 32) {
+      Alert.alert("Folders", "Unlock main vault to encrypt folder names.");
+      return;
+    }
+    const label = newFolderName.trim();
+    if (!label) {
+      Alert.alert("Folders", "Enter a folder name.");
+      return;
+    }
+    const enc = encryptUtf8(mapKey, label, VAULT_FOLDER_NAME_AAD);
+    const { error } = await supabase.from("vault_folders").insert({
+      parent_id: selectedFolderId,
+      encrypted_name: enc,
+      created_by: profileId,
+    });
+    if (error) {
+      Alert.alert("Folders", error.message);
+      return;
+    }
+    setNewFolderName("");
+    void refreshPrivate();
+  };
 
   const refreshOps = useCallback(
     async (kind: OpsDocKind) => {
@@ -184,6 +237,7 @@ export default function VaultScreen() {
     const { error: rowErr } = await supabase.from("vault_objects").insert({
       owner_id: profileId,
       storage_path: path,
+      folder_id: section === "private" ? selectedFolderId : null,
     });
     if (rowErr) Alert.alert("Vault row", rowErr.message);
     void refreshPrivate();
@@ -252,8 +306,14 @@ export default function VaultScreen() {
         body = formatMissionForDisplay(JSON.parse(json) as MissionPlanPayloadV1);
       } else if (row.doc_kind === "sitrep") {
         body = formatSitrepForDisplay(JSON.parse(json) as SitrepPayloadV1);
-      } else {
+      } else if (row.doc_kind === "aar") {
         body = formatAarForDisplay(JSON.parse(json) as AarPayloadV1);
+      } else if (row.doc_kind === "target_package") {
+        body = formatTargetPackageForDisplay(JSON.parse(json) as TargetPackagePayloadV1);
+      } else if (row.doc_kind === "intel_report") {
+        body = formatIntelReportForDisplay(JSON.parse(json) as IntelReportPayloadV1);
+      } else {
+        body = json;
       }
       const alertTitle =
         (disp.subtitle ? `${disp.title} · ${disp.subtitle}` : disp.title) + ` · ${row.author_username}`;
@@ -265,14 +325,30 @@ export default function VaultScreen() {
 
   const privateFiltered = useMemo(() => {
     const base = rows.filter((r) => r.storage_path.includes(`/${prefix}/`));
+    const inFolder = base.filter((r) => {
+      if (selectedFolderId == null) return r.folder_id == null;
+      return r.folder_id === selectedFolderId;
+    });
     const q = query.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter((r) => {
+    if (!q) return inFolder;
+    return inFolder.filter((r) => {
       const disp = vaultItemDisplayName(r.storage_path);
       const hay = `${disp.title} ${disp.subtitle ?? ""} ${r.storage_path}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [rows, prefix, query]);
+  }, [rows, prefix, query, selectedFolderId]);
+
+  const folderDisplay = useCallback(
+    (f: VaultFolderRow) => {
+      if (!mapKey || mapKey.length !== 32) return "Folder";
+      try {
+        return decryptUtf8(mapKey, f.encrypted_name, VAULT_FOLDER_NAME_AAD);
+      } catch {
+        return "(folder)";
+      }
+    },
+    [mapKey],
+  );
 
   const opsFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -293,10 +369,14 @@ export default function VaultScreen() {
     });
   }, [opsRows, query, mapKey]);
 
-  const borderM = scheme === "dark" ? "#27272a" : "#e4e4e7";
-  const surface = scheme === "dark" ? "#0a0a0b" : "#fafafa";
+  const borderM = TacticalPalette.border;
+  const surface = TacticalPalette.elevated;
+  const panelBg = TacticalPalette.panel;
 
-  const sectionChip = (id: VaultSection, label: string) => {
+  const quickAccessPrivate = useMemo(() => privateFiltered.slice(0, 4), [privateFiltered]);
+  const quickAccessOps = useMemo(() => opsFiltered.slice(0, 4), [opsFiltered]);
+
+  const sidebarNav = (id: VaultSection, label: string) => {
     const active = section === id;
     return (
       <Pressable
@@ -306,22 +386,25 @@ export default function VaultScreen() {
           if (id === "private") void refreshPrivate();
           else void refreshOps(id);
         }}
-        style={[
-          styles.segChip,
+        style={({ pressed }) => [
+          styles.sideItem,
           {
-            borderColor: active ? p.tint : borderM,
-            backgroundColor: active ? (scheme === "dark" ? "#1e293b" : "#eff6ff") : surface,
+            borderLeftWidth: 3,
+            borderLeftColor: active ? TacticalPalette.accent : "transparent",
+            backgroundColor: active ? panelBg : pressed ? TacticalPalette.charcoal : "transparent",
           },
         ]}>
         <FontAwesome
           name={sectionIcon(id)}
-          size={15}
-          color={active ? p.tint : p.tabIconDefault}
-          style={{ marginRight: 8 }}
+          size={18}
+          color={active ? TacticalPalette.accent : TacticalPalette.boneMuted}
+          style={{ marginRight: isWideLayout ? 12 : 0 }}
         />
-        <Text style={{ color: p.text, fontWeight: "700", fontSize: 13 }} numberOfLines={1}>
-          {label}
-        </Text>
+        {isWideLayout ? (
+          <Text style={{ color: active ? TacticalPalette.bone : TacticalPalette.boneMuted, fontWeight: "700", fontSize: 13 }} numberOfLines={1}>
+            {label}
+          </Text>
+        ) : null}
       </Pressable>
     );
   };
@@ -336,11 +419,11 @@ export default function VaultScreen() {
           styles.driveRow,
           {
             borderColor: borderM,
-            backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : surface,
+            backgroundColor: pressed ? TacticalPalette.panel : surface,
           },
         ]}>
-        <View style={[styles.iconBubble, { backgroundColor: scheme === "dark" ? "#1e293b" : "#e0f2fe" }]}>
-          <FontAwesome name="lock" size={20} color={p.tint} />
+        <View style={[styles.iconBubble, { backgroundColor: TacticalPalette.oliveDrab }]}>
+          <FontAwesome name="lock" size={20} color={TacticalPalette.bone} />
         </View>
         <View style={styles.driveText}>
           <Text style={[styles.driveTitle, { color: p.text }]} numberOfLines={1}>
@@ -364,7 +447,7 @@ export default function VaultScreen() {
           styles.gridCell,
           {
             borderColor: borderM,
-            backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : surface,
+            backgroundColor: pressed ? TacticalPalette.panel : surface,
           },
         ]}>
         <FontAwesome name="file-o" size={32} color={p.tint} style={{ marginBottom: 10 }} />
@@ -402,7 +485,15 @@ export default function VaultScreen() {
       .filter(Boolean)
       .join(" · ");
     const icon: ComponentProps<typeof FontAwesome>["name"] =
-      item.doc_kind === "mission_plan" ? "map-marker" : item.doc_kind === "sitrep" ? "bullhorn" : "history";
+      item.doc_kind === "mission_plan"
+        ? "map-marker"
+        : item.doc_kind === "sitrep"
+          ? "bullhorn"
+          : item.doc_kind === "target_package"
+            ? "crosshairs"
+            : item.doc_kind === "intel_report"
+              ? "eye"
+              : "history";
     return (
       <Pressable
         onPress={() => openOpsRow(item)}
@@ -410,11 +501,11 @@ export default function VaultScreen() {
           styles.driveRow,
           {
             borderColor: borderM,
-            backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : surface,
+            backgroundColor: pressed ? TacticalPalette.panel : surface,
           },
         ]}>
-        <View style={[styles.iconBubble, { backgroundColor: scheme === "dark" ? "#1e293b" : "#e0f2fe" }]}>
-          <FontAwesome name={icon} size={20} color={p.tint} />
+        <View style={[styles.iconBubble, { backgroundColor: TacticalPalette.oliveDrab }]}>
+          <FontAwesome name={icon} size={20} color={TacticalPalette.bone} />
         </View>
         <View style={styles.driveText}>
           <Text style={[styles.driveTitle, { color: p.text }]} numberOfLines={2}>
@@ -441,7 +532,15 @@ export default function VaultScreen() {
     }
     const disp = formatOpsVaultHeadline(head);
     const icon: ComponentProps<typeof FontAwesome>["name"] =
-      item.doc_kind === "mission_plan" ? "map-marker" : item.doc_kind === "sitrep" ? "bullhorn" : "history";
+      item.doc_kind === "mission_plan"
+        ? "map-marker"
+        : item.doc_kind === "sitrep"
+          ? "bullhorn"
+          : item.doc_kind === "target_package"
+            ? "crosshairs"
+            : item.doc_kind === "intel_report"
+              ? "eye"
+              : "history";
     return (
       <Pressable
         onPress={() => openOpsRow(item)}
@@ -449,7 +548,7 @@ export default function VaultScreen() {
           styles.gridCell,
           {
             borderColor: borderM,
-            backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : surface,
+            backgroundColor: pressed ? TacticalPalette.panel : surface,
           },
         ]}>
         <FontAwesome name={icon} size={28} color={p.tint} style={{ marginBottom: 8 }} />
@@ -473,136 +572,313 @@ export default function VaultScreen() {
       ? "No files yet. Upload photos or documents — they stay encrypted in your partition.\n\nNaming tips: use kebab-case or short callsigns in filenames when you control the source (e.g. charlie-sierra-roster or CS-summary)."
       : "Nothing in this folder. Create items from the Missions tab (mission plan, SITREP, AAR). Titles like charlie-sierra or CS are formatted for quick scanning.";
 
+  const renderQuickPrivate = (item: VaultObjectRow) => {
+    const disp = vaultItemDisplayName(item.storage_path);
+    return (
+      <Pressable
+        key={item.id}
+        onPress={() => void openPrivateRow(item)}
+        style={({ pressed }) => [
+          styles.quickTile,
+          { borderColor: borderM, opacity: pressed ? 0.9 : 1 },
+        ]}>
+        <FontAwesome name="file-o" size={18} color={TacticalPalette.accent} />
+        <Text style={[styles.quickTileText, { color: p.text }]} numberOfLines={2}>
+          {disp.title}
+        </Text>
+      </Pressable>
+    );
+  };
+
+  const renderQuickOps = (item: OpsReportRow) => {
+    let head = "…";
+    if (mapKey?.length === 32) {
+      try {
+        const json = decryptUtf8(mapKey, item.encrypted_payload, OPS_AAD[item.doc_kind]);
+        head = previewOpsRow(item.doc_kind, json);
+      } catch {
+        head = "…";
+      }
+    }
+    const disp = formatOpsVaultHeadline(head);
+    return (
+      <Pressable
+        key={item.id}
+        onPress={() => openOpsRow(item)}
+        style={({ pressed }) => [
+          styles.quickTile,
+          { borderColor: borderM, opacity: pressed ? 0.9 : 1 },
+        ]}>
+        <FontAwesome name="folder-open" size={18} color={TacticalPalette.accent} />
+        <Text style={[styles.quickTileText, { color: p.text }]} numberOfLines={2}>
+          {disp.title}
+        </Text>
+      </Pressable>
+    );
+  };
+
   return (
-    <View style={[styles.wrap, { backgroundColor: p.background }]}>
-      <Text style={[styles.breadcrumb, { color: p.tabIconDefault }]}>
-        Vault · {(vaultMode ?? "main").toUpperCase()} · {sectionTitle(section)}
-        {loading ? " · …" : ""}
-      </Text>
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.segRow}>
-        {sectionChip("private", "My drive")}
-        {sectionChip("mission_plan", "Missions")}
-        {sectionChip("sitrep", "SITREPs")}
-        {sectionChip("aar", "AARs")}
-      </ScrollView>
-
-      <View style={[styles.searchBar, { borderColor: borderM, backgroundColor: surface }]}>
-        <FontAwesome name="search" size={16} color={p.tabIconDefault} style={{ marginRight: 10 }} />
-        <TextInput
-          placeholder="Search in this folder"
-          placeholderTextColor="#888"
-          value={query}
-          onChangeText={setQuery}
-          style={[styles.searchInput, { color: p.text }]}
-          autoCorrect={false}
-          autoCapitalize="none"
-        />
-        {query.length ? (
-          <Pressable onPress={() => setQuery("")} hitSlop={10}>
-            <Text style={{ color: p.tint, fontWeight: "700" }}>Clear</Text>
-          </Pressable>
-        ) : null}
-      </View>
-
-      <View style={styles.toolbar}>
-        <View style={styles.viewToggle}>
-          <Pressable
-            onPress={() => setViewMode("list")}
-            style={[
-              styles.viewBtn,
-              viewMode === "list" && { backgroundColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
-            ]}>
-            <FontAwesome name="list" size={16} color={p.text} />
-          </Pressable>
-          <Pressable
-            onPress={() => setViewMode("grid")}
-            style={[
-              styles.viewBtn,
-              viewMode === "grid" && { backgroundColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
-            ]}>
-            <FontAwesome name="th-large" size={16} color={p.text} />
-          </Pressable>
+    <View style={[styles.shell, { backgroundColor: p.background }]}>
+      <View style={styles.driveRowLayout}>
+        <View
+          style={[
+            styles.sidebar,
+            {
+              width: isWideLayout ? 200 : 56,
+              borderRightWidth: StyleSheet.hairlineWidth,
+              borderRightColor: borderM,
+              backgroundColor: TacticalPalette.charcoal,
+            },
+          ]}>
+          {isWideLayout ? <Text style={styles.sidebarBrand}>Drive</Text> : null}
+          {sidebarNav("private", "My drive")}
+          {sidebarNav("mission_plan", "Mission plans")}
+          {sidebarNav("sitrep", "SITREPs")}
+          {sidebarNav("aar", "After action")}
+          {section === "private" ? (
+            <View style={{ paddingHorizontal: 10, paddingTop: 14, gap: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderM, marginTop: 8 }}>
+              <Text style={{ color: TacticalPalette.boneMuted, fontSize: 10, fontWeight: "800", letterSpacing: 0.6 }}>
+                FOLDERS
+              </Text>
+              {selectedFolderId != null ? (
+                <Pressable
+                  onPress={() => {
+                    const cur = folders.find((x) => x.id === selectedFolderId);
+                    setSelectedFolderId(cur?.parent_id ?? null);
+                  }}
+                  style={({ pressed }) => ({
+                    paddingVertical: 8,
+                    paddingHorizontal: 8,
+                    borderRadius: 8,
+                    backgroundColor: pressed ? TacticalPalette.charcoal : "transparent",
+                  })}>
+                  <Text style={{ color: TacticalPalette.accent, fontSize: 12, fontWeight: "700" }}>↑ Parent</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => setSelectedFolderId(null)}
+                style={({ pressed }) => ({
+                  paddingVertical: 8,
+                  paddingHorizontal: 8,
+                  borderRadius: 8,
+                  backgroundColor: selectedFolderId == null ? panelBg : pressed ? TacticalPalette.charcoal : "transparent",
+                })}>
+                <Text style={{ color: TacticalPalette.bone, fontSize: 12, fontWeight: selectedFolderId == null ? "800" : "600" }}>
+                  Root
+                </Text>
+              </Pressable>
+              {folders
+                .filter((f) => f.parent_id === selectedFolderId)
+                .map((f) => (
+                  <Pressable
+                    key={f.id}
+                    onPress={() => setSelectedFolderId(f.id)}
+                    style={({ pressed }) => ({
+                      paddingVertical: 8,
+                      paddingHorizontal: 8,
+                      borderRadius: 8,
+                      backgroundColor: pressed ? TacticalPalette.charcoal : "transparent",
+                    })}>
+                    <Text style={{ color: TacticalPalette.bone, fontSize: 12 }} numberOfLines={1}>
+                      {folderDisplay(f)}
+                    </Text>
+                  </Pressable>
+                ))}
+              {isWideLayout ? (
+                <>
+                  <TextInput
+                    placeholder="New folder"
+                    placeholderTextColor={TacticalPalette.boneMuted}
+                    value={newFolderName}
+                    onChangeText={setNewFolderName}
+                    style={{
+                      borderWidth: 1,
+                      borderColor: borderM,
+                      borderRadius: 8,
+                      padding: 8,
+                      fontSize: 12,
+                      color: TacticalPalette.bone,
+                      marginTop: 6,
+                    }}
+                  />
+                  <Pressable
+                    onPress={() => void createFolder()}
+                    style={{
+                      paddingVertical: 10,
+                      alignItems: "center",
+                      backgroundColor: TacticalPalette.accentDim,
+                      borderRadius: 8,
+                    }}>
+                    <Text style={{ color: TacticalPalette.bone, fontWeight: "800", fontSize: 12 }}>Create encrypted folder</Text>
+                  </Pressable>
+                </>
+              ) : null}
+            </View>
+          ) : null}
         </View>
-        {section === "private" ? (
-          <View style={styles.uploadSplit}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => void pickPhoto()}
-              style={[styles.uploadChip, { borderColor: p.tint }]}>
-              <FontAwesome name="image" size={14} color={p.tint} style={{ marginRight: 6 }} />
-              <Text style={{ color: p.text, fontWeight: "700", fontSize: 13 }}>Photo</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => void pickDoc()}
-              style={[styles.uploadChip, { borderColor: p.tint }]}>
-              <FontAwesome name="file-o" size={14} color={p.tint} style={{ marginRight: 6 }} />
-              <Text style={{ color: p.text, fontWeight: "700", fontSize: 13 }}>File</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <Text style={[styles.teamHint, { color: p.tabIconDefault }]}>Team folder · shared decrypt key</Text>
-        )}
-      </View>
 
-      {section === "private" ? (
-        <FlatList
-          style={{ flex: 1 }}
-          data={privateFiltered}
-          keyExtractor={(i) => i.id}
-          numColumns={viewMode === "grid" ? 2 : 1}
-          key={viewMode}
-          columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
-          ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
-          refreshing={refreshing}
-          onRefresh={async () => {
-            setRefreshing(true);
-            await refreshPrivate();
-            setRefreshing(false);
-          }}
-          ListEmptyComponent={
-            <Text style={[styles.empty, { color: p.tabIconDefault }]}>{emptyCopy}</Text>
-          }
-          renderItem={viewMode === "grid" ? renderPrivateGrid : renderPrivateList}
-        />
-      ) : (
-        <FlatList
-          style={{ flex: 1 }}
-          data={opsFiltered}
-          keyExtractor={(i) => i.id}
-          numColumns={viewMode === "grid" ? 2 : 1}
-          key={`ops-${viewMode}`}
-          columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
-          ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
-          refreshing={refreshing}
-          onRefresh={async () => {
-            setRefreshing(true);
-            await refreshOps(section);
-            setRefreshing(false);
-          }}
-          ListEmptyComponent={
-            <Text style={[styles.empty, { color: p.tabIconDefault }]}>{emptyCopy}</Text>
-          }
-          renderItem={viewMode === "grid" ? renderOpsGrid : renderOpsList}
-        />
-      )}
+        <View style={[styles.mainCol, { maxWidth: 1200 }]}>
+          <Text style={[styles.breadcrumb, { color: p.tabIconDefault }]}>
+            {(vaultMode ?? "main").toUpperCase()} · {sectionTitle(section)}
+            {loading ? " · …" : ""}
+          </Text>
+
+          <View style={[styles.searchBar, { borderColor: borderM, backgroundColor: surface }]}>
+            <FontAwesome name="search" size={16} color={p.tabIconDefault} style={{ marginRight: 10 }} />
+            <TextInput
+              placeholder="Search in this folder"
+              placeholderTextColor={TacticalPalette.boneMuted}
+              value={query}
+              onChangeText={setQuery}
+              style={[styles.searchInput, { color: p.text }]}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {query.length ? (
+              <Pressable onPress={() => setQuery("")} hitSlop={10}>
+                <Text style={{ color: p.tint, fontWeight: "700" }}>Clear</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {(section === "private" ? quickAccessPrivate.length > 0 : quickAccessOps.length > 0) ? (
+            <View style={styles.quickSection}>
+              <Text style={[styles.quickLabel, { color: p.tabIconDefault }]}>Quick access</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
+                {section === "private"
+                  ? quickAccessPrivate.map((item) => renderQuickPrivate(item))
+                  : quickAccessOps.map((item) => renderQuickOps(item))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          <View style={styles.toolbar}>
+            <View style={styles.viewToggle}>
+              <Pressable
+                onPress={() => void setVaultDriveViewMode("list")}
+                style={[
+                  styles.viewBtn,
+                  viewMode === "list" && { backgroundColor: TacticalPalette.panel },
+                ]}>
+                <FontAwesome name="list" size={16} color={p.text} />
+              </Pressable>
+              <Pressable
+                onPress={() => void setVaultDriveViewMode("grid")}
+                style={[
+                  styles.viewBtn,
+                  viewMode === "grid" && { backgroundColor: TacticalPalette.panel },
+                ]}>
+                <FontAwesome name="th-large" size={16} color={p.text} />
+              </Pressable>
+            </View>
+            {section === "private" ? (
+              <View style={[styles.uploadSplit, { alignItems: "center" }]}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void pickPhoto()}
+                  style={[styles.uploadChip, { borderColor: p.tint }]}>
+                  <FontAwesome name="image" size={14} color={p.tint} style={{ marginRight: 6 }} />
+                  <Text style={{ color: p.text, fontWeight: "700", fontSize: 13 }}>Photo</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void pickDoc()}
+                  style={[styles.uploadChip, { borderColor: p.tint }]}>
+                  <FontAwesome name="file-o" size={14} color={p.tint} style={{ marginRight: 6 }} />
+                  <Text style={{ color: p.text, fontWeight: "700", fontSize: 13 }}>File</Text>
+                </Pressable>
+                <PanicButton variant="compact" />
+              </View>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1, flexWrap: "wrap" }}>
+                <Text style={[styles.teamHint, { color: p.tabIconDefault, flex: 1 }]}>Team folder · shared decrypt key</Text>
+                <PanicButton variant="compact" />
+              </View>
+            )}
+          </View>
+
+          {section === "private" ? (
+            <FlatList
+              style={{ flex: 1 }}
+              data={privateFiltered}
+              keyExtractor={(i) => i.id}
+              numColumns={viewMode === "grid" ? 2 : 1}
+              key={viewMode}
+              columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
+              ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true);
+                await refreshPrivate();
+                setRefreshing(false);
+              }}
+              ListEmptyComponent={
+                <Text style={[styles.empty, { color: p.tabIconDefault }]}>{emptyCopy}</Text>
+              }
+              renderItem={viewMode === "grid" ? renderPrivateGrid : renderPrivateList}
+            />
+          ) : (
+            <FlatList
+              style={{ flex: 1 }}
+              data={opsFiltered}
+              keyExtractor={(i) => i.id}
+              numColumns={viewMode === "grid" ? 2 : 1}
+              key={`ops-${viewMode}`}
+              columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
+              ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true);
+                await refreshOps(section);
+                setRefreshing(false);
+              }}
+              ListEmptyComponent={
+                <Text style={[styles.empty, { color: p.tabIconDefault }]}>{emptyCopy}</Text>
+              }
+              renderItem={viewMode === "grid" ? renderOpsGrid : renderOpsList}
+            />
+          )}
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
-  breadcrumb: { fontSize: 12, fontWeight: "600", marginBottom: 10, letterSpacing: 0.2 },
-  segRow: { flexDirection: "row", gap: 8, paddingBottom: 12, alignItems: "center" },
-  segChip: {
+  shell: { flex: 1 },
+  driveRowLayout: { flex: 1, flexDirection: "row" },
+  sidebar: { paddingTop: 12, paddingBottom: 20 },
+  sidebarBrand: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    color: TacticalPalette.boneMuted,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  sideItem: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginHorizontal: 4,
+    borderRadius: 8,
+    marginBottom: 4,
   },
+  mainCol: { flex: 1, paddingHorizontal: 16, paddingTop: 12, alignSelf: "stretch", width: "100%" },
+  breadcrumb: { fontSize: 12, fontWeight: "600", marginBottom: 10, letterSpacing: 0.2 },
+  quickSection: { marginBottom: 12 },
+  quickLabel: { fontSize: 11, fontWeight: "700", marginBottom: 8, letterSpacing: 0.6 },
+  quickRow: { flexDirection: "row", gap: 10, paddingBottom: 4 },
+  quickTile: {
+    width: 120,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: TacticalPalette.elevated,
+    gap: 8,
+  },
+  quickTileText: { fontSize: 12, fontWeight: "600" },
   searchBar: {
     flexDirection: "row",
     alignItems: "center",

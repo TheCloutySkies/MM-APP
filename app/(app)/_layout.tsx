@@ -1,14 +1,11 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Link, Tabs } from "expo-router";
+import { Tabs } from "expo-router";
 import type { ComponentProps } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 
-import { PanicButton } from "@/components/PanicButton";
 import { ScorchedEarthListener } from "@/components/ScorchedEarthListener";
-import { useClientOnlyValue } from "@/components/useClientOnlyValue";
-import { useColorScheme } from "@/components/useColorScheme";
-import Colors from "@/constants/Colors";
 import { useDeadManMonitor } from "@/hooks/useDeadManMonitor";
+import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { useMMStore } from "@/store/mmStore";
 
 function TabIcon(props: { name: ComponentProps<typeof FontAwesome>["name"]; color: string }) {
@@ -16,13 +13,11 @@ function TabIcon(props: { name: ComponentProps<typeof FontAwesome>["name"]; colo
 }
 
 export default function AppLayout() {
-  const colorScheme = useColorScheme();
   const desktopMode = useMMStore((s) => s.desktopMode);
   useDeadManMonitor();
 
   const isWebDesk = Platform.OS === "web" && desktopMode;
-  const scheme = colorScheme ?? "light";
-  const theme = Colors[scheme];
+  const theme = useTacticalChrome();
 
   return (
     <>
@@ -31,20 +26,20 @@ export default function AppLayout() {
         screenOptions={{
           tabBarActiveTintColor: theme.tint,
           tabBarInactiveTintColor: theme.tabIconDefault,
-          headerShown: useClientOnlyValue(false, true),
-          headerStyle: {
-            backgroundColor: theme.background,
-          },
-          headerTintColor: theme.text,
+          headerShown: false,
           tabBarStyle: isWebDesk
             ? {
                 width: 96,
                 backgroundColor: theme.background,
                 borderRightWidth: StyleSheet.hairlineWidth,
-                borderRightColor: scheme === "dark" ? "#3f3f46" : "#e4e4e7",
+                borderRightColor: "#3a4238",
                 elevation: 0,
               }
-            : { backgroundColor: theme.background },
+            : {
+                backgroundColor: theme.background,
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: "#3a4238",
+              },
           ...(isWebDesk
             ? {
                 tabBarPosition: "left" as const,
@@ -54,20 +49,45 @@ export default function AppLayout() {
             : {}),
         }}>
         <Tabs.Screen
+          name="home"
+          options={{
+            title: "Home",
+            tabBarIcon: ({ color }) => <TabIcon name="home" color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="vault"
           options={{
             title: "Vault",
             tabBarIcon: ({ color }) => <TabIcon name="lock" color={color} />,
-            headerRight: () => (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginRight: 8 }}>
-                <PanicButton variant="compact" />
-                <Link href="/(app)/settings" asChild>
-                  <Pressable accessibilityRole="button">
-                    <FontAwesome name="cog" size={22} color={Colors[colorScheme ?? "light"].text} />
-                  </Pressable>
-                </Link>
-              </View>
-            ),
+          }}
+        />
+        <Tabs.Screen
+          name="forensics"
+          options={{
+            title: "Forensics",
+            href: null,
+          }}
+        />
+        <Tabs.Screen
+          name="bulletin"
+          options={{
+            title: "Bulletin",
+            href: null,
+          }}
+        />
+        <Tabs.Screen
+          name="gear"
+          options={{
+            title: "Gear",
+            href: null,
+          }}
+        />
+        <Tabs.Screen
+          name="operation-detail"
+          options={{
+            title: "Operation",
+            href: null,
           }}
         />
         <Tabs.Screen

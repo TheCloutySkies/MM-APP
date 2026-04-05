@@ -1,4 +1,4 @@
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
     Alert,
@@ -11,12 +11,23 @@ import {
 } from "react-native";
 
 import { AarModal } from "@/components/ops/AarModal";
+import { IntelReportModal } from "@/components/ops/IntelReportModal";
 import { MissionPlanModal } from "@/components/ops/MissionPlanModal";
+import { OperationHubModal } from "@/components/ops/OperationHubModal";
 import { SitrepModal } from "@/components/ops/SitrepModal";
+import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
 import Colors from "@/constants/Colors";
+import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8 } from "@/lib/crypto/aesGcm";
-import type { MissionPlanPayloadV1 } from "@/lib/opsReports";
-import { OPS_AAD, formatMissionForDisplay, previewOpsRow, type OpsDocKind } from "@/lib/opsReports";
+import {
+  OPERATION_HUB_AAD,
+  OPS_AAD,
+  formatMissionForDisplay,
+  previewOpsRow,
+  type MissionPlanPayloadV1,
+  type OperationHubPayloadV1,
+  type OpsDocKind,
+} from "@/lib/opsReports";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
 type LegacyMissionRow = { id: string; ciphertext: string; created_at: string };
@@ -40,7 +51,15 @@ type CombinedRow =
       author_username: string;
     };
 
+type HubRow = {
+  id: string;
+  encrypted_payload: string;
+  created_at: string;
+  author_username: string;
+};
+
 export default function MissionsScreen() {
+  const router = useRouter();
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
   const supabase = useMMStore((s) => s.supabase);
@@ -63,20 +82,28 @@ export default function MissionsScreen() {
 
   const [legacyRows, setLegacyRows] = useState<LegacyMissionRow[]>([]);
   const [opsRows, setOpsRows] = useState<OpsRow[]>([]);
+  const [hubs, setHubs] = useState<HubRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const [showMissionModal, setShowMissionModal] = useState(false);
   const [showSitrepModal, setShowSitrepModal] = useState(false);
   const [showAarModal, setShowAarModal] = useState(false);
+  const [showOpHubModal, setShowOpHubModal] = useState(false);
+  const [showTargetModal, setShowTargetModal] = useState(false);
+  const [showIntelModal, setShowIntelModal] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!supabase) return;
-    const [legacyRes, opsRes] = await Promise.all([
+    const [legacyRes, opsRes, hubsRes] = await Promise.all([
       supabase.from("missions").select("id, ciphertext, created_at").order("created_at", { ascending: false }),
       supabase
         .from("ops_reports")
         .select("id, encrypted_payload, created_at, doc_kind, author_username")
         .eq("doc_kind", "mission_plan")
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("operation_hubs")
+        .select("id, encrypted_payload, created_at, author_username")
         .order("created_at", { ascending: false }),
     ]);
     if (legacyRes.error) {
@@ -90,6 +117,12 @@ export default function MissionsScreen() {
       setOpsRows([]);
     } else {
       setOpsRows((opsRes.data ?? []) as OpsRow[]);
+    }
+    if (hubsRes.error) {
+      console.warn(hubsRes.error.message);
+      setHubs([]);
+    } else {
+      setHubs((hubsRes.data ?? []) as HubRow[]);
     }
   }, [supabase]);
 
@@ -184,7 +217,66 @@ export default function MissionsScreen() {
           }}>
           <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>AAR</Text>
         </Pressable>
+        <Pressable
+          style={[styles.actionBtn, { borderColor: p.tint, borderWidth: 1, backgroundColor: "transparent" }]}
+          onPress={() => {
+            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
+            else setShowTargetModal(true);
+          }}>
+          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>Target pkg</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.actionBtn, { borderColor: p.tint, borderWidth: 1, backgroundColor: "transparent" }]}
+          onPress={() => {
+            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
+            else setShowIntelModal(true);
+          }}>
+          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>Intel</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.actionBtn, { backgroundColor: TacticalPalette.elevated, borderWidth: 1, borderColor: p.tint }]}
+          onPress={() => {
+            if (!mapKey) Alert.alert("Missions", "Encryption key unavailable.");
+            else setShowOpHubModal(true);
+          }}>
+          <Text style={[styles.actionBtnTxOutline, { color: p.tint }]}>New operation</Text>
+        </Pressable>
       </View>
+
+      <Text style={[styles.section, { color: p.tabIconDefault }]}>Operations (scoped reports)</Text>
+      <FlatList
+        data={hubs}
+        keyExtractor={(r) => r.id}
+        scrollEnabled={false}
+        style={{ maxHeight: 220 }}
+        ListEmptyComponent={<Text style={{ color: p.tabIconDefault, marginBottom: 8 }}>No operation hubs yet.</Text>}
+        renderItem={({ item }) => {
+          let title = "Operation";
+          if (mapKey?.length === 32) {
+            try {
+              const json = decryptUtf8(mapKey, item.encrypted_payload, OPERATION_HUB_AAD);
+              title = (JSON.parse(json) as OperationHubPayloadV1).title;
+            } catch {
+              title = "(cannot decrypt)";
+            }
+          }
+          return (
+            <Pressable
+              style={[styles.card, { borderColor: p.tabIconDefault, marginBottom: 8 }]}
+              onPress={() =>
+                router.push({
+                  pathname: "/(app)/operation-detail",
+                  params: { id: item.id },
+                })
+              }>
+              <Text style={{ color: p.text, fontWeight: "700" }}>{title}</Text>
+              <Text style={{ color: p.tabIconDefault, fontSize: 12 }}>
+                {item.author_username} · {item.created_at}
+              </Text>
+            </Pressable>
+          );
+        }}
+      />
 
       <Text style={[styles.section, { color: p.tabIconDefault }]}>Mission plans (team + legacy)</Text>
       <FlatList
@@ -254,6 +346,36 @@ export default function MissionsScreen() {
       <AarModal
         visible={showAarModal}
         onClose={() => setShowAarModal(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        onSaved={() => void refresh()}
+      />
+      <OperationHubModal
+        visible={showOpHubModal}
+        onClose={() => setShowOpHubModal(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        onSaved={() => void refresh()}
+      />
+      <TargetPackageModal
+        visible={showTargetModal}
+        onClose={() => setShowTargetModal(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        onSaved={() => void refresh()}
+      />
+      <IntelReportModal
+        visible={showIntelModal}
+        onClose={() => setShowIntelModal(false)}
         scheme={sch}
         supabase={supabase}
         profileId={profileId}

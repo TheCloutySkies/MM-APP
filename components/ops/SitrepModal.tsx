@@ -26,6 +26,7 @@ type Props = {
   username: string | null;
   mapKey: Uint8Array | null;
   onSaved: () => void;
+  operationId?: string | null;
 };
 
 export function SitrepModal({
@@ -37,6 +38,7 @@ export function SitrepModal({
   username,
   mapKey,
   onSaved,
+  operationId = null,
 }: Props) {
   const p = Colors[scheme];
   const [reportDatetime, setReportDatetime] = useState(() => new Date().toISOString().slice(0, 16));
@@ -101,6 +103,7 @@ export function SitrepModal({
         author_username: preparedBy,
         doc_kind: "sitrep",
         encrypted_payload: encrypted,
+        ...(operationId ? { operation_id: operationId } : {}),
       });
       if (error) throw new Error(error.message);
       onSaved();

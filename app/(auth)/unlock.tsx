@@ -7,15 +7,15 @@ import {
     Text,
     TextInput,
     View,
-    useColorScheme,
+    useWindowDimensions,
 } from "react-native";
 
-import Colors from "@/constants/Colors";
+import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useMMStore } from "@/store/mmStore";
 
 export default function UnlockScreen() {
-  const scheme = useColorScheme() ?? "light";
-  const p = Colors[scheme];
+  const { width } = useWindowDimensions();
+  const mmSize = Math.min(168, Math.max(88, width * 0.32));
   const router = useRouter();
   const tryUnlock = useMMStore((s) => s.tryUnlock);
   const touchRealUnlock = useMMStore((s) => s.touchRealUnlock);
@@ -33,33 +33,59 @@ export default function UnlockScreen() {
         return;
       }
       if (r.mode === "main") await touchRealUnlock();
-      router.replace("/(app)/vault");
+      router.replace("/(app)/home");
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <View style={[styles.box, { backgroundColor: p.background }]}>
-      <Text style={[styles.note, { color: p.text }]}>
+    <View style={[styles.box, { backgroundColor: TacticalPalette.matteBlack }]}>
+      <Text
+        accessibilityRole="header"
+        style={[
+          styles.mmMark,
+          {
+            fontSize: mmSize,
+            lineHeight: mmSize * 1.02,
+            color: TacticalPalette.bone,
+          },
+        ]}>
+        MM
+      </Text>
+      <Text style={[styles.note, { color: TacticalPalette.boneMuted }]}>
         Same screen for primary or duress PIN. Master password + PIN.
       </Text>
       <TextInput
         placeholder="Master password"
-        placeholderTextColor="#888"
+        placeholderTextColor={TacticalPalette.boneMuted}
         secureTextEntry
         value={master}
         onChangeText={setMaster}
-        style={[styles.input, { borderColor: p.tabIconDefault, color: p.text }]}
+        style={[
+          styles.input,
+          {
+            borderColor: TacticalPalette.border,
+            color: TacticalPalette.bone,
+            backgroundColor: TacticalPalette.charcoal,
+          },
+        ]}
       />
       <TextInput
         placeholder="PIN"
-        placeholderTextColor="#888"
+        placeholderTextColor={TacticalPalette.boneMuted}
         keyboardType="number-pad"
         secureTextEntry
         value={pin}
         onChangeText={setPin}
-        style={[styles.input, { borderColor: p.tabIconDefault, color: p.text }]}
+        style={[
+          styles.input,
+          {
+            borderColor: TacticalPalette.border,
+            color: TacticalPalette.bone,
+            backgroundColor: TacticalPalette.charcoal,
+          },
+        ]}
       />
       <Pressable
         accessibilityRole="button"
@@ -67,7 +93,10 @@ export default function UnlockScreen() {
         onPress={() => void submit()}
         style={({ pressed }) => [
           styles.btn,
-          { backgroundColor: pressed ? p.tabIconSelected : p.tint, opacity: busy ? 0.6 : 1 },
+          {
+            backgroundColor: pressed ? TacticalPalette.accentDim : TacticalPalette.accent,
+            opacity: busy ? 0.6 : 1,
+          },
         ]}>
         <Text style={styles.btnTx}>Unlock</Text>
       </Pressable>
@@ -76,9 +105,25 @@ export default function UnlockScreen() {
 }
 
 const styles = StyleSheet.create({
-  box: { flex: 1, padding: 24, justifyContent: "center", gap: 14 },
-  note: { marginBottom: 8, fontSize: 14 },
+  box: {
+    flex: 1,
+    padding: 24,
+    justifyContent: "center",
+    gap: 14,
+    alignItems: "stretch",
+    maxWidth: 480,
+    alignSelf: "center",
+    width: "100%",
+  },
+  mmMark: {
+    fontWeight: "900",
+    letterSpacing: -6,
+    textAlign: "center",
+    marginBottom: 8,
+    marginTop: -24,
+  },
+  note: { marginBottom: 8, fontSize: 14, textAlign: "center", lineHeight: 20 },
   input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 18 },
   btn: { paddingVertical: 16, borderRadius: 12, alignItems: "center" },
-  btnTx: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  btnTx: { color: TacticalPalette.bone, fontWeight: "700", fontSize: 16 },
 });

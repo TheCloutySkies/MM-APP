@@ -38,6 +38,8 @@ type Props = {
   username: string | null;
   mapKey: Uint8Array | null;
   onSaved: () => void;
+  /** When set, report is scoped to this operation hub */
+  operationId?: string | null;
 };
 
 export function MissionPlanModal({
@@ -49,6 +51,7 @@ export function MissionPlanModal({
   username,
   mapKey,
   onSaved,
+  operationId = null,
 }: Props) {
   const p = Colors[scheme];
   const [title, setTitle] = useState("");
@@ -111,6 +114,7 @@ export function MissionPlanModal({
         author_username: username?.trim() || "unknown",
         doc_kind: "mission_plan",
         encrypted_payload: encrypted,
+        ...(operationId ? { operation_id: operationId } : {}),
       });
       if (error) throw new Error(error.message);
       reset();

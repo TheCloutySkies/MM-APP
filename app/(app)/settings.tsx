@@ -26,6 +26,8 @@ export default function SettingsScreen() {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
   const router = useRouter();
+  const visualTheme = useMMStore((s) => s.visualTheme);
+  const setVisualTheme = useMMStore((s) => s.setVisualTheme);
   const desktopMode = useMMStore((s) => s.desktopMode);
   const setDesktopMode = useMMStore((s) => s.setDesktopMode);
   const logout = useMMStore((s) => s.logout);
@@ -120,6 +122,18 @@ export default function SettingsScreen() {
       <Text style={[styles.heroSub, { color: p.tabIconDefault }]}>
         Session, distress routing, and data export.
       </Text>
+
+      <SettingsSection
+        title="Appearance"
+        subtitle="Woodland tactical chrome, or Night Ops (near-black surfaces with crimson accents).">
+        <View style={[styles.rowCard, { borderColor: p.tabIconDefault }]}>
+          <Text style={[styles.rowLabel, { color: p.text }]}>Night Ops mode</Text>
+          <Switch
+            value={visualTheme === "nightops"}
+            onValueChange={(v) => void setVisualTheme(v ? "nightops" : "woodland")}
+          />
+        </View>
+      </SettingsSection>
 
       {Platform.OS === "web" ? (
         <SettingsSection

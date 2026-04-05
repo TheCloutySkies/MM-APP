@@ -73,9 +73,26 @@ For **preview / non-production branches**, Cloudflare may use `npx wrangler vers
 | `EXPO_PUBLIC_SUPABASE_URL` | Yes | Your Supabase project URL |
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Yes | Anon key only — never service role |
 | `EXPO_PUBLIC_MM_MAP_SHARED_KEY` | Optional | 64-char hex so the whole team decrypts the same map/ops ciphertext |
+| `EXPO_PUBLIC_SUPERMAP_API_URL` | Optional | Self-hosted [SuperMap](https://github.com/TheCloutySkies/SuperMap) API base (no `/` tail) to proxy earthquakes and other feeds without baking third-party keys into the PWA |
 | `EXPO_PUBLIC_DISTRESS_WEBHOOK_URL` | Optional | Webhook URL is visible in bundle — insecure endpoint |
 
 Mirror whatever you already use in local `.env` (see `.env.example`).
+
+### Forensics (in-app)
+
+The **Forensics** screen runs **only in the browser/client**: SHA-256, JPEG EXIF segment summary (GPS presence without printing coordinates), optional image dimensions, and metadata scrub for JPEGs (same pipeline as vault upload prep). It is **not** a full port of desktop CloutVision (OpenCV, YOLO, Tesseract, MediaPipe, etc.).
+
+### Supabase RLS (CLI only)
+
+Schema changes and RLS policies live under `supabase/migrations/`. Apply remotely with:
+
+```bash
+supabase login
+supabase link --project-ref YOUR_PROJECT_REF
+supabase db push --linked --yes
+```
+
+Hybrid model: **vault + storage** are owner-strict; **map_markers** and **ops_reports** allow `SELECT` for any authenticated member (E2EE ciphertext). See `supabase/migrations/20260407000000_rls_hardening.sql` for documentation and UPDATE policies.
 
 ## After deploy
 

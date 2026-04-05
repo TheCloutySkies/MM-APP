@@ -39,3 +39,10 @@ export type MapFlyToRequest = {
   zoom?: number;
   seq: number;
 };
+
+export type MapBaseLayerId = "osm" | "satellite";
+
+/** `crosshair` while placing routes / pins; map uses grab when panning (web Leaflet default). */
+export type MapPointerMode = "default" | "crosshair";
+
+export type MapUserLocation = { lat: number; lng: number };

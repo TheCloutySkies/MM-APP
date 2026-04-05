@@ -22,9 +22,17 @@ export function buildOverpassFormBody(
   north: number,
   east: number,
 ): string {
-  const bbox = `${south},${west},${north},${east}`;
-  const q = ql.replaceAll("__BBOX__", bbox).replaceAll("{{BBOX}}", bbox);
-  const inner = `[out:json][timeout:25];${q}out geom;`;
+  const bboxParen = `(${south},${west},${north},${east})`;
+  let q = ql
+    .replaceAll("__BBOX__", bboxParen)
+    .replaceAll("{{BBOX}}", bboxParen)
+    .replaceAll("(BBOX)", bboxParen);
+
+  const trimmed = q.trim();
+  const looksComplete =
+    /\[out\s*:\s*json\]/i.test(trimmed) && /;\s*out\s*;?\s*$/i.test(trimmed);
+
+  const inner = looksComplete ? `[timeout:40];${trimmed}` : `[out:json][timeout:40];${q}out geom;`;
   return `data=${encodeURIComponent(inner)}`;
 }
 
@@ -51,4 +59,13 @@ export const OVERPASS_PRESETS = {
   water: `node["natural"="water"](__BBOX__);node["natural"="spring"](__BBOX__);way["natural"="water"](__BBOX__);`,
   power: `way["power"="line"](__BBOX__);way["power"="minor_line"](__BBOX__);`,
   emergency: `node["amenity"="hospital"](__BBOX__);node["amenity"="police"](__BBOX__);node["emergency"="ambulance_station"](__BBOX__);`,
+} as const;
+
+/** Doctrine / infrastructure presets (full Overpass QL fragments). */
+export const OVERPASS_C4ISR_PRESETS = {
+  power_substations: `[out:json];node["power"="substation"](BBOX);out;`,
+  medical: `[out:json];node["amenity"="hospital"](BBOX);out;`,
+  fuel: `[out:json];node["amenity"="fuel"](BBOX);out;`,
+  natural_water: `[out:json];node["waterway"="waterfall"](BBOX);out;`,
+  comm_towers: `[out:json];node["man_made"="communications_tower"](BBOX);out;`,
 } as const;

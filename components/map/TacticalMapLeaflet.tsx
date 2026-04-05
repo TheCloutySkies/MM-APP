@@ -2,16 +2,26 @@ import L from "leaflet";
 import { useEffect, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 
-import type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay } from "./mapTypes";
+import type {
+  MapBaseLayerId,
+  MapFlyToRequest,
+  MapPin,
+  MapPolygonOverlay,
+  MapPolylineOverlay,
+  MapPointerMode,
+  MapUserLocation,
+} from "./mapTypes";
 
 type Props = {
   pins: MapPin[];
   polylines?: MapPolylineOverlay[];
   polygons?: MapPolygonOverlay[];
   onLongPress?: (lat: number, lng: number) => void;
-  /** Single-tap (e.g. drawing routes/zones). */
   onPress?: (lat: number, lng: number) => void;
   flyTo?: MapFlyToRequest | null;
+  baseLayer?: MapBaseLayerId;
+  userLocation?: MapUserLocation | null;
+  pointerMode?: MapPointerMode;
 };
 
 /** CDN assets so Metro never resolves leaflet/dist/images/*.png */
@@ -24,6 +34,13 @@ function useLeafletAssets() {
       link.rel = "stylesheet";
       link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
       document.head.appendChild(link);
+    }
+    const pulseId = "mm-user-loc-css";
+    if (!document.getElementById(pulseId)) {
+      const s = document.createElement("style");
+      s.id = pulseId;
+      s.textContent = `@keyframes mm-pulse{0%{transform:scale(1);opacity:.85}100%{transform:scale(2.4);opacity:0}}.mm-user-dot{width:14px;height:14px;border-radius:50%;background:#1e88e5;border:2px solid #fff;box-shadow:0 0 0 2px rgba(30,136,229,.5);position:relative}.mm-user-dot:after{content:"";position:absolute;inset:-6px;border-radius:50%;animation:mm-pulse 1.75s ease-out infinite;background:rgba(30,136,229,.4)}`;
+      document.head.appendChild(s);
     }
     const base = "https://unpkg.com/leaflet@1.9.4/dist/images/";
     L.Icon.Default.mergeOptions({
@@ -60,6 +77,28 @@ function markerIcon(tint: string) {
   });
 }
 
+function userLocationIcon() {
+  return L.divIcon({
+    className: "mm-leaflet-user",
+    html: `<div class="mm-user-dot"></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
+}
+
+function makeOsmLayer() {
+  return L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+  });
+}
+
+function makeSatelliteLayer() {
+  return L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "Tiles © Esri" },
+  );
+}
+
 function TacticalMapLeaflet({
   pins,
   polylines = [],
@@ -67,11 +106,15 @@ function TacticalMapLeaflet({
   onLongPress,
   onPress,
   flyTo,
+  baseLayer = "osm",
+  userLocation,
+  pointerMode = "default",
 }: Props) {
   useLeafletAssets();
 
   const containerRef = useRef<View>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const tileRef = useRef<L.TileLayer | null>(null);
   const layerRef = useRef<L.LayerGroup | null>(null);
   const pinsRef = useRef(pins);
   pinsRef.current = pins;
@@ -83,6 +126,8 @@ function TacticalMapLeaflet({
   onLongPressRef.current = onLongPress;
   const onPressRef = useRef(onPress);
   onPressRef.current = onPress;
+  const userLocRef = useRef(userLocation);
+  userLocRef.current = userLocation;
 
   const paintAll = () => {
     const group = layerRef.current;
@@ -120,6 +165,13 @@ function TacticalMapLeaflet({
         .bindPopup(popupHtml(p.title, p.subtitle))
         .addTo(group);
     }
+
+    const ul = userLocRef.current;
+    if (ul) {
+      L.marker([ul.lat, ul.lng], { icon: userLocationIcon(), title: "You", zIndexOffset: 900 })
+        .bindPopup(popupHtml("Your position", "Live GPS / geolocation"))
+        .addTo(group);
+    }
   };
 
   useEffect(() => {
@@ -129,9 +181,9 @@ function TacticalMapLeaflet({
     const map = L.map(el, { scrollWheelZoom: true }).setView([39.5, -120.2], 7);
     mapRef.current = map;
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
-    }).addTo(map);
+    const initial = baseLayer === "satellite" ? makeSatelliteLayer() : makeOsmLayer();
+    initial.addTo(map);
+    tileRef.current = initial;
 
     layerRef.current = L.layerGroup().addTo(map);
     paintAll();
@@ -157,12 +209,30 @@ function TacticalMapLeaflet({
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
+      tileRef.current = null;
     };
   }, []);
 
   useEffect(() => {
+    const map = mapRef.current;
+    const cur = tileRef.current;
+    if (!map || !cur) return;
+    map.removeLayer(cur);
+    const next = baseLayer === "satellite" ? makeSatelliteLayer() : makeOsmLayer();
+    next.addTo(map);
+    tileRef.current = next;
+  }, [baseLayer]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const el = map.getContainer();
+    el.style.cursor = pointerMode === "crosshair" ? "crosshair" : "";
+  }, [pointerMode]);
+
+  useEffect(() => {
     paintAll();
-  }, [pins, polylines, polygons]);
+  }, [pins, polylines, polygons, userLocation]);
 
   useEffect(() => {
     if (flyTo == null) return;

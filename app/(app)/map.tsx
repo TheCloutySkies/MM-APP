@@ -25,7 +25,9 @@ import {
     type MapPolygonOverlay,
     type MapPolylineOverlay,
 } from "@/components/map/TacticalMap";
+import type { MapBaseLayerId, MapPointerMode, MapUserLocation } from "@/components/map/mapTypes";
 import Colors from "@/constants/Colors";
+import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { geocodeSearch, type GeocodeHit } from "@/lib/geocode";
 import {
@@ -35,10 +37,18 @@ import {
     type TacCategoryId,
 } from "@/lib/mapMarkers";
 import {
+    bboxAroundPoint,
+    fetchNasaFirmsHotspots,
+    fetchPowerInfrastructure,
+    fetchUsgsEarthquakes,
+} from "@/lib/osint/supermapLayers";
+import {
+    OVERPASS_C4ISR_PRESETS,
     OVERPASS_PRESETS,
     buildOverpassFormBody,
     fetchOverpass,
 } from "@/lib/overpass";
+import { fetchOpenMeteoCurrent } from "@/lib/weather";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
 const MIN_SHEET_H = 56;
@@ -80,6 +90,14 @@ export default function MapScreen() {
   const [showIntel, setShowIntel] = useState(true);
   const [customQl, setCustomQl] = useState(`node["amenity"="fuel"](__BBOX__);`);
   const [loading, setLoading] = useState(false);
+  const [osintPower, setOsintPower] = useState(false);
+  const [osintUsgs, setOsintUsgs] = useState(false);
+  const [osintFirms, setOsintFirms] = useState(false);
+  const [supermapPins, setSupermapPins] = useState<MapPin[]>([]);
+  const [supermapPolylines, setSupermapPolylines] = useState<MapPolylineOverlay[]>([]);
+  const [baseLayer, setBaseLayer] = useState<MapBaseLayerId>("osm");
+  const [userLoc, setUserLoc] = useState<MapUserLocation | null>(null);
+  const [pointDropMode, setPointDropMode] = useState(false);
 
   const flySeq = useRef(0);
   const [flyTo, setFlyTo] = useState<MapFlyToRequest | null>(null);
@@ -103,6 +121,33 @@ export default function MapScreen() {
   useEffect(() => {
     expandedHeightRef.current = Math.min(expandedHeightRef.current, maxSheetH);
   }, [maxSheetH]);
+
+  useEffect(() => {
+    let nativeSub: { remove: () => void } | null = null;
+    let webWatch: number | undefined;
+    const run = async () => {
+      if (Platform.OS === "web") {
+        if (typeof navigator === "undefined" || !navigator.geolocation) return;
+        webWatch = navigator.geolocation.watchPosition(
+          (pos) => setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 8000 },
+        );
+        return;
+      }
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== "granted") return;
+      nativeSub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.Balanced },
+        (loc) => setUserLoc({ lat: loc.coords.latitude, lng: loc.coords.longitude }),
+      );
+    };
+    void run();
+    return () => {
+      if (Platform.OS === "web" && webWatch != null) navigator.geolocation.clearWatch(webWatch);
+      nativeSub?.remove();
+    };
+  }, []);
 
   const flyToCoords = (lat: number, lng: number, zoom = 10) => {
     flySeq.current += 1;
@@ -181,10 +226,25 @@ export default function MapScreen() {
 
   const onMapLongPress = (lat: number, lng: number) => {
     if (drawTool === "route" || drawTool === "zone") return;
-    setCategoryPick({ geom: "point", coordinates: [{ lat, lng }] });
+    Alert.alert("Map location", `${lat.toFixed(5)}, ${lng.toFixed(5)}`, [
+      {
+        text: "Tactical pin",
+        onPress: () => setCategoryPick({ geom: "point", coordinates: [{ lat, lng }] }),
+      },
+      {
+        text: "Weather here",
+        onPress: () => void showWeatherHere(lat, lng),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
   };
 
   const onMapTap = (lat: number, lng: number) => {
+    if (pointDropMode) {
+      setCategoryPick({ geom: "point", coordinates: [{ lat, lng }] });
+      setPointDropMode(false);
+      return;
+    }
     if (drawTool === "route" || drawTool === "zone") {
       setPathDraft((d) => [...d, { lat, lng }]);
     }
@@ -193,7 +253,11 @@ export default function MapScreen() {
   const setDrawMode = (mode: "idle" | "route" | "zone") => {
     setPathDraft([]);
     setDrawTool(mode);
+    setPointDropMode(false);
   };
+
+  const mapPointerMode: MapPointerMode =
+    drawTool === "route" || drawTool === "zone" || pointDropMode ? "crosshair" : "default";
 
   const finishPathDrawing = () => {
     if (drawTool === "route" && pathDraft.length >= 2) {
@@ -254,6 +318,89 @@ export default function MapScreen() {
     }
   };
 
+  const runC4isrIntel = async (presetQl: string) => {
+    setLoading(true);
+    try {
+      const here = tacticalPins[0] ?? userLoc;
+      const pad = 0.18;
+      const south = (here?.lat ?? 39.5) - pad;
+      const north = (here?.lat ?? 39.5) + pad;
+      const west = (here?.lng ?? -120.2) - pad;
+      const east = (here?.lng ?? -120.2) + pad;
+      const body = buildOverpassFormBody(presetQl, south, west, north, east);
+      const res = await fetchOverpass(body);
+      const json = (await res.json()) as {
+        elements?: { type: string; id: number; lat?: number; lon?: number; tags?: Record<string, string> }[];
+      };
+      const next: MapPin[] = [];
+      for (const el of json.elements ?? []) {
+        if (el.lat == null || el.lon == null) continue;
+        next.push({
+          id: `c4-${el.type}-${el.id}`,
+          lat: el.lat,
+          lng: el.lon,
+          title: el.tags?.name ?? el.tags?.amenity ?? el.tags?.power ?? "OSM",
+          tint: "#94a3b8",
+        });
+      }
+      setIntelPins(next);
+    } catch (e) {
+      Alert.alert("Overpass", e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const showWeatherHere = async (lat: number, lng: number) => {
+    setLoading(true);
+    try {
+      const { current } = await fetchOpenMeteoCurrent(lat, lng);
+      const lines = [
+        `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+        current.temperature_2m != null ? `Temp: ${current.temperature_2m} °C` : "",
+        current.wind_speed_10m != null ? `Wind: ${current.wind_speed_10m} km/h (10m)` : "",
+        current.weather_code != null ? `WX code: ${current.weather_code}` : "",
+        "",
+        "Privacy: coordinates are sent to Open-Meteo (or your EXPO_PUBLIC_MM_GEO_PROXY_URL) from this device.",
+      ].filter((l) => l !== "");
+      Alert.alert("Weather (Open-Meteo)", lines.join("\n"));
+    } catch (e) {
+      Alert.alert("Weather", e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshSupermapLayers = useCallback(async () => {
+    if (!osintPower && !osintUsgs && !osintFirms) {
+      setSupermapPins([]);
+      setSupermapPolylines([]);
+      return;
+    }
+    const here = tacticalPins[0];
+    const lat = here?.lat ?? 39.5;
+    const lng = here?.lng ?? -120.2;
+    const bbox = bboxAroundPoint(lat, lng, 0.4);
+    setLoading(true);
+    try {
+      const pins: MapPin[] = [];
+      const lines: MapPolylineOverlay[] = [];
+      if (osintPower) {
+        const p = await fetchPowerInfrastructure(bbox);
+        pins.push(...p.pins);
+        lines.push(...p.polylines);
+      }
+      if (osintUsgs) pins.push(...(await fetchUsgsEarthquakes(bbox)));
+      if (osintFirms) pins.push(...(await fetchNasaFirmsHotspots(bbox)));
+      setSupermapPins(pins);
+      setSupermapPolylines(lines);
+    } catch (e) {
+      Alert.alert("OSINT layers", e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLoading(false);
+    }
+  }, [osintPower, osintUsgs, osintFirms, tacticalPins]);
+
   const runCustomIntel = async () => {
     setLoading(true);
     try {
@@ -285,14 +432,16 @@ export default function MapScreen() {
     }
   };
 
-  const mergedPins = showIntel ? [...tacticalPins, ...intelPins] : tacticalPins;
+  const mergedPins = showIntel
+    ? [...tacticalPins, ...intelPins, ...supermapPins]
+    : tacticalPins;
 
   const draftLinePreview = useMemo((): MapPolylineOverlay | null => {
     if (drawTool === "route" && pathDraft.length >= 2) {
       return {
         id: "__mm_draft_line__",
         coordinates: pathDraft.map((x) => ({ latitude: x.lat, longitude: x.lng })),
-        color: scheme === "dark" ? "#94a3b8" : "#64748b",
+        color: TacticalPalette.boneMuted,
         title: "Route draft",
         lineDash: "7 5",
       };
@@ -301,7 +450,7 @@ export default function MapScreen() {
       return {
         id: "__mm_draft_line2__",
         coordinates: pathDraft.map((x) => ({ latitude: x.lat, longitude: x.lng })),
-        color: scheme === "dark" ? "#94a3b8" : "#64748b",
+        color: TacticalPalette.boneMuted,
         title: "Zone draft",
         lineDash: "7 5",
       };
@@ -320,18 +469,17 @@ export default function MapScreen() {
     return {
       id: "__mm_draft_poly__",
       coordinates: ring,
-      strokeColor: scheme === "dark" ? "#94a3b8" : "#64748b",
-      fillColor:
-        scheme === "dark" ? "rgba(148,163,184,0.22)" : "rgba(100,116,139,0.22)",
+      strokeColor: TacticalPalette.boneMuted,
+      fillColor: "rgba(139,115,85,0.22)",
       title: "Zone draft",
     };
   }, [drawTool, pathDraft, scheme]);
 
   const mapPolylines = useMemo(() => {
-    const list = [...tacticalPolylines];
+    const list = [...tacticalPolylines, ...(showIntel ? supermapPolylines : [])];
     if (draftLinePreview) list.push(draftLinePreview);
     return list;
-  }, [tacticalPolylines, draftLinePreview]);
+  }, [tacticalPolylines, supermapPolylines, showIntel, draftLinePreview]);
 
   const mapPolygons = useMemo(() => {
     const list = [...tacticalPolygons];
@@ -436,8 +584,11 @@ export default function MapScreen() {
           polylines={mapPolylines}
           polygons={mapPolygons}
           onLongPress={onMapLongPress}
-          onPress={drawTool === "route" || drawTool === "zone" ? onMapTap : undefined}
+          onPress={drawTool === "route" || drawTool === "zone" || pointDropMode ? onMapTap : undefined}
           flyTo={flyTo}
+          baseLayer={baseLayer}
+          userLocation={userLoc}
+          pointerMode={mapPointerMode}
         />
         {loading ? (
           <View style={styles.loader}>
@@ -550,6 +701,166 @@ export default function MapScreen() {
                 ]}
                 onPress={() => void runIntel("emergency")}>
                 <Text style={[styles.chipLabel, { color: p.text }]}>Emergency</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: baseLayer === "satellite" ? 2 : 1,
+                    borderColor: baseLayer === "satellite" ? TacticalPalette.accent : p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => setBaseLayer((b) => (b === "osm" ? "satellite" : "osm"))}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>
+                  {baseLayer === "satellite" ? "Satellite" : "OSM map"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: pointDropMode ? 2 : 1,
+                    borderColor: pointDropMode ? p.tint : p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => {
+                  if (pointDropMode) {
+                    setPointDropMode(false);
+                  } else {
+                    setPathDraft([]);
+                    setDrawTool("idle");
+                    setPointDropMode(true);
+                  }
+                }}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>
+                  Pin drop {pointDropMode ? "ON" : "off"}
+                </Text>
+              </Pressable>
+            </ScrollView>
+
+            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass · infrastructure presets</Text>
+            <ScrollView
+              horizontal
+              keyboardShouldPersistTaps="handled"
+              showsHorizontalScrollIndicator={false}
+              style={styles.chipScroll}
+              contentContainerStyle={styles.chipRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.power_substations)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Substations</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.medical)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Medical</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.fuel)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Fuel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.natural_water)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Waterfalls</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.comm_towers)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Comm towers</Text>
+              </Pressable>
+            </ScrollView>
+
+            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>OSINT layers (SuperMap)</Text>
+            <Text style={[styles.drawHint, { color: p.tabIconDefault }]}>
+              Toggle sources, then load. Uses map centroid (first tactical pin or default Nevada). Power draws lines +
+              substations; USGS and FIRMS are points.
+            </Text>
+            <ScrollView
+              horizontal
+              keyboardShouldPersistTaps="handled"
+              showsHorizontalScrollIndicator={false}
+              style={styles.chipScroll}
+              contentContainerStyle={styles.chipRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: osintPower ? 2 : 1,
+                    borderColor: osintPower ? TacticalPalette.accent : p.tabIconDefault,
+                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                  },
+                ]}
+                onPress={() => setOsintPower((v) => !v)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Grid · power</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: osintUsgs ? 2 : 1,
+                    borderColor: osintUsgs ? TacticalPalette.danger : p.tabIconDefault,
+                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                  },
+                ]}
+                onPress={() => setOsintUsgs((v) => !v)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>USGS EQ</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: osintFirms ? 2 : 1,
+                    borderColor: osintFirms ? TacticalPalette.coyote : p.tabIconDefault,
+                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                  },
+                ]}
+                onPress={() => setOsintFirms((v) => !v)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>NASA FIRMS</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: TacticalPalette.accent,
+                    backgroundColor: pressed ? TacticalPalette.panel : TacticalPalette.elevated,
+                  },
+                ]}
+                onPress={() => void refreshSupermapLayers()}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Load OSINT</Text>
               </Pressable>
             </ScrollView>
 

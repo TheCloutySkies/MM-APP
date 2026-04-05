@@ -4,11 +4,14 @@ import { create } from "zustand";
 import * as aes from "@/lib/crypto/aesGcm";
 import { hexToBytes, utf8 } from "@/lib/crypto/bytes";
 import { deriveKeyArgon2id } from "@/lib/crypto/kdf";
+import type { VisualThemeId } from "@/constants/TacticalTheme";
 import { getMapSharedKeyHex } from "@/lib/env";
 import { SK, secureGet, secureSet, wipeLocalSecrets, wipeSessionTokens } from "@/lib/secure/mmSecureStore";
 import { createMMSupabase } from "@/lib/supabase/mmClient";
 
 export type VaultMode = "main" | "decoy";
+
+export type VaultDriveViewMode = "grid" | "list";
 
 type MMState = {
   hydrated: boolean;
@@ -22,6 +25,8 @@ type MMState = {
   decoyVaultKey: Uint8Array | null;
   supabase: SupabaseClient | null;
   desktopMode: boolean;
+  vaultDriveViewMode: VaultDriveViewMode;
+  visualTheme: VisualThemeId;
 };
 
 type MMActions = {
@@ -33,6 +38,7 @@ type MMActions = {
   login: (token: string, profileId: string, username: string) => Promise<void>;
   loadDesktopPref: () => Promise<void>;
   setDesktopMode: (v: boolean) => Promise<void>;
+  setVisualTheme: (v: VisualThemeId) => Promise<void>;
   completeSetup: (args: {
     masterPassword: string;
     primaryPin: string;
@@ -46,6 +52,7 @@ type MMActions = {
   ) => Promise<{ ok: boolean; mode?: VaultMode }>;
   setSupabaseClient: (c: SupabaseClient | null) => void;
   touchRealUnlock: () => Promise<void>;
+  setVaultDriveViewMode: (v: VaultDriveViewMode) => Promise<void>;
 };
 
 async function persistSession(token: string, profileId: string, username: string) {
@@ -65,8 +72,20 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   decoyVaultKey: null,
   supabase: null,
   desktopMode: false,
+  vaultDriveViewMode: "list",
+  visualTheme: "woodland",
 
   setSupabaseClient: (c) => set({ supabase: c }),
+
+  setVisualTheme: async (v) => {
+    await secureSet(SK.visualTheme, v);
+    set({ visualTheme: v });
+  },
+
+  setVaultDriveViewMode: async (v) => {
+    await secureSet(SK.vaultDriveViewMode, v);
+    set({ vaultDriveViewMode: v });
+  },
 
   hydrateFromStorage: async () => {
     const token = await secureGet(SK.accessToken);
@@ -74,6 +93,10 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     const username = await secureGet(SK.username);
     const setupDone = (await secureGet(SK.setupDone)) === "1";
     const desktopMode = (await secureGet(SK.desktopMode)) === "1";
+    const vmode = (await secureGet(SK.vaultDriveViewMode)) as VaultDriveViewMode | null;
+    const vaultDriveViewMode: VaultDriveViewMode = vmode === "grid" ? "grid" : "list";
+    const vt = (await secureGet(SK.visualTheme)) as VisualThemeId | null;
+    const visualTheme: VisualThemeId = vt === "nightops" ? "nightops" : "woodland";
     let supabase: SupabaseClient | null = null;
     if (token) {
       supabase = await createMMSupabase(token);
@@ -86,6 +109,8 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       setupComplete: setupDone,
       supabase,
       desktopMode,
+      vaultDriveViewMode,
+      visualTheme,
     });
   },
 

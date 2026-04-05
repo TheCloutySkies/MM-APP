@@ -1,19 +1,27 @@
-const tintColorLight = '#2f95dc';
-const tintColorDark = '#fff';
+import { TacticalDark, TacticalLight, type TacticalColors } from "@/constants/TacticalTheme";
 
-export default {
-  light: {
-    text: '#000',
-    background: '#fff',
-    tint: tintColorLight,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorLight,
-  },
-  dark: {
-    text: '#fff',
-    background: '#000',
-    tint: tintColorDark,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorDark,
-  },
+export type { TacticalColors };
+
+const light = {
+  text: TacticalLight.text,
+  background: TacticalLight.background,
+  tint: TacticalLight.tint,
+  tabIconDefault: TacticalLight.tabIconDefault,
+  tabIconSelected: TacticalLight.tabIconSelected,
 };
+
+const dark = {
+  text: TacticalDark.text,
+  background: TacticalDark.background,
+  tint: TacticalDark.tint,
+  tabIconDefault: TacticalDark.tabIconDefault,
+  tabIconSelected: TacticalDark.tabIconSelected,
+};
+
+/**
+ * App color scheme: tactical woodland for both light and dark (dark-first PWA).
+ */
+export default { light, dark };
+
+/** Full semantic tactical tokens when you need surfaces, borders, etc. */
+export const tacticalByScheme = { light: TacticalLight, dark: TacticalDark } as const;

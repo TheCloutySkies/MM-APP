@@ -27,12 +27,12 @@ export default function Root({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Dark-first tactical shell — avoids light gray “gutters” on desktop web when OS theme is light. */
+const TACTICAL_PAGE_BG = "#0d0f0c";
+
 const responsiveBackground = `
-body {
-  background-color: #fff;
+html, body, #root, #__expo {
+  background-color: ${TACTICAL_PAGE_BG};
+  min-height: 100%;
 }
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: #000;
-  }
-}`;
+`;

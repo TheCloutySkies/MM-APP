@@ -38,3 +38,24 @@ export function getMapSharedKeyHex(): string | undefined {
   if (!raw || raw.length !== 64) return undefined;
   return raw;
 }
+
+/** Optional self-hosted SuperMap situational-awareness-api base (no trailing slash). */
+export function getSupermapApiUrl(): string {
+  return (
+    readExtra("EXPO_PUBLIC_SUPERMAP_API_URL") ??
+    process.env.EXPO_PUBLIC_SUPERMAP_API_URL ??
+    ""
+  );
+}
+
+/**
+ * Optional MM Cloudflare Worker (or other proxy) base — weather / geo calls can be routed so the
+ * external service sees the proxy IP, not the client (see OpSec note in docs).
+ * Example: `https://mm-geo.example.workers.dev`
+ */
+export function getMmGeoProxyUrl(): string | undefined {
+  const raw =
+    readExtra("EXPO_PUBLIC_MM_GEO_PROXY_URL") ?? process.env.EXPO_PUBLIC_MM_GEO_PROXY_URL ?? "";
+  if (!raw?.trim()) return undefined;
+  return raw.replace(/\/$/, "");
+}

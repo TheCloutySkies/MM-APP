@@ -65,6 +65,10 @@ export const SK = {
   wrapDecoy: "mm_wrap_decoy",
   lastRealUnlock: "mm_last_real_unlock",
   desktopMode: "mm_desktop_mode",
+  /** "grid" | "list" — vault file browser layout */
+  vaultDriveViewMode: "mm_vault_drive_view",
+  /** "woodland" | "nightops" — tactical chrome variant */
+  visualTheme: "mm_visual_theme",
 } as const;
 
 /** Clear MM session tokens only (crypto setup on device preserved). */

@@ -3,13 +3,25 @@
  * Decryption key: same as map markers — `resolveMapEncryptKey` + optional `EXPO_PUBLIC_MM_MAP_SHARED_KEY`.
  */
 
-export type OpsDocKind = "mission_plan" | "sitrep" | "aar";
+export type OpsDocKind =
+  | "mission_plan"
+  | "sitrep"
+  | "aar"
+  | "target_package"
+  | "intel_report";
 
 export const OPS_AAD = {
   mission_plan: "mm-ops-mission",
   sitrep: "mm-ops-sitrep",
   aar: "mm-ops-aar",
+  target_package: "mm-ops-target-pkg",
+  intel_report: "mm-ops-intel",
 } as const;
+
+export const OPERATION_HUB_AAD = "mm-operation-hub-v1" as const;
+export const BULLETIN_AAD = "mm-ops-bulletin-v1" as const;
+export const GEAR_LOADOUT_AAD = "mm-gear-loadout-v1" as const;
+export const VAULT_FOLDER_NAME_AAD = "mm-vault-folder-name-v1" as const;
 
 export type ExerciseNature = "live_operation" | "patrol" | "training_exercise" | "other";
 
@@ -68,7 +80,75 @@ export type AarPayloadV1 = {
   preparedBy: string;
 };
 
-export type AnyOpsPayload = MissionPlanPayloadV1 | SitrepPayloadV1 | AarPayloadV1;
+export type OperationHubPayloadV1 = {
+  v: 1;
+  kind: "operation_hub";
+  title: string;
+  codename?: string;
+  notes?: string;
+  createdAt: number;
+};
+
+export type TargetPackagePayloadV1 = {
+  v: 1;
+  kind: "target_package";
+  objectiveName: string;
+  coordinates: string;
+  infilRoutes: string;
+  exfilRoutes: string;
+  hvtDescription: string;
+  commPlan: string;
+  carverNotes?: string;
+  createdAt: number;
+};
+
+export type IntelReportBranch = "area" | "observed_activity" | "individuals";
+
+export type IntelReportPayloadV1 = {
+  v: 1;
+  kind: "intel_report";
+  branch: IntelReportBranch;
+  title: string;
+  terrain?: string;
+  weatherImpact?: string;
+  keyInfrastructure?: string;
+  saluteSize?: string;
+  saluteActivity?: string;
+  saluteLocation?: string;
+  saluteUnit?: string;
+  saluteTime?: string;
+  saluteEquipment?: string;
+  physicalDescription?: string;
+  affiliations?: string;
+  threatLevel?: string;
+  remarks?: string;
+  createdAt: number;
+};
+
+export type BulletinPostPayloadV1 = {
+  v: 1;
+  title: string;
+  body: string;
+  createdAt: number;
+};
+
+export type GearLineItem = { id: string; label: string; packed?: boolean };
+
+export type GearLoadoutPayloadV1 = {
+  v: 1;
+  name: string;
+  line1: GearLineItem[];
+  line2: GearLineItem[];
+  line3: GearLineItem[];
+  createdAt: number;
+};
+
+export type AnyOpsPayload =
+  | MissionPlanPayloadV1
+  | SitrepPayloadV1
+  | AarPayloadV1
+  | TargetPackagePayloadV1
+  | IntelReportPayloadV1;
 
 export function parseMembersInput(raw: string): string[] {
   return raw
@@ -90,6 +170,10 @@ export function previewOpsRow(kind: OpsDocKind, decryptedJson: string): string {
       }
       case "aar":
         return String(o.operationTitle ?? "After action report");
+      case "target_package":
+        return String(o.objectiveName ?? "Target package");
+      case "intel_report":
+        return String(o.title ?? "Intel report");
       default:
         return kind;
     }
@@ -150,4 +234,46 @@ export function formatAarForDisplay(p: AarPayloadV1): string {
     `PREPARED BY: ${p.preparedBy}`,
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+export function formatTargetPackageForDisplay(p: TargetPackagePayloadV1): string {
+  return [
+    `OBJECTIVE: ${p.objectiveName}`,
+    `COORDINATES: ${p.coordinates}`,
+    `INFIL: ${p.infilRoutes}`,
+    `EXFIL: ${p.exfilRoutes}`,
+    `HVT: ${p.hvtDescription}`,
+    `COMM PLAN: ${p.commPlan}`,
+    p.carverNotes ? `CARVER / NOTES: ${p.carverNotes}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function formatIntelReportForDisplay(p: IntelReportPayloadV1): string {
+  const head = [`BRANCH: ${p.branch}`, `TITLE: ${p.title}`];
+  if (p.branch === "area") {
+    head.push(
+      `TERRAIN: ${p.terrain ?? "—"}`,
+      `WEATHER IMPACT: ${p.weatherImpact ?? "—"}`,
+      `INFRASTRUCTURE: ${p.keyInfrastructure ?? "—"}`,
+    );
+  } else if (p.branch === "observed_activity") {
+    head.push(
+      `S: ${p.saluteSize ?? "—"}`,
+      `A: ${p.saluteActivity ?? "—"}`,
+      `L: ${p.saluteLocation ?? "—"}`,
+      `U: ${p.saluteUnit ?? "—"}`,
+      `T: ${p.saluteTime ?? "—"}`,
+      `E: ${p.saluteEquipment ?? "—"}`,
+    );
+  } else {
+    head.push(
+      `DESCRIPTION: ${p.physicalDescription ?? "—"}`,
+      `AFFILIATIONS: ${p.affiliations ?? "—"}`,
+      `THREAT: ${p.threatLevel ?? "—"}`,
+    );
+  }
+  if (p.remarks) head.push(`REMARKS: ${p.remarks}`);
+  return head.join("\n");
 }

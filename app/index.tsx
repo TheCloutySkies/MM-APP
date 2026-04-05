@@ -1,6 +1,7 @@
 import { Redirect } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
 
+import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useMMStore } from "@/store/mmStore";
 
 export default function Index() {
@@ -11,7 +12,13 @@ export default function Index() {
 
   if (!hydrated) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: TacticalPalette.matteBlack,
+        }}>
         <ActivityIndicator size="large" />
       </View>
     );
@@ -20,5 +27,5 @@ export default function Index() {
   if (!token) return <Redirect href="/(auth)/login" />;
   if (!setup) return <Redirect href="/(auth)/setup" />;
   if (!vaultMode) return <Redirect href="/(auth)/unlock" />;
-  return <Redirect href="/(app)/vault" />;
+  return <Redirect href="/(app)/home" />;
 }

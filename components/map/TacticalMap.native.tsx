@@ -9,12 +9,24 @@ import MapView, {
     UrlTile,
 } from "react-native-maps";
 
-import type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay } from "./mapTypes";
+import type {
+  MapBaseLayerId,
+  MapFlyToRequest,
+  MapPin,
+  MapPolygonOverlay,
+  MapPolylineOverlay,
+  MapPointerMode,
+  MapUserLocation,
+} from "./mapTypes";
 
 export type { MapFlyToRequest, MapPin };
 
 /** Standard OSM raster tiles ({@link https://wiki.openstreetmap.org/wiki/Raster_tile_providers}). */
 export const OSM_TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
+/** Esri World Imagery (subject to Esri / ArcGIS terms of use). */
+export const ESRI_SATELLITE_TILE_TEMPLATE =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 
 type Props = {
   pins: MapPin[];
@@ -23,6 +35,9 @@ type Props = {
   onLongPress?: (lat: number, lng: number) => void;
   onPress?: (lat: number, lng: number) => void;
   flyTo?: MapFlyToRequest | null;
+  baseLayer?: MapBaseLayerId;
+  userLocation?: MapUserLocation | null;
+  pointerMode?: MapPointerMode;
 };
 
 function zoomToDeltas(lat: number, zoom: number) {
@@ -41,6 +56,9 @@ export function TacticalMap({
   onLongPress,
   onPress,
   flyTo,
+  baseLayer = "osm",
+  userLocation,
+  pointerMode: _pointerMode = "default",
 }: Props) {
   const mapRef = useRef<MapView>(null);
   const baseMapType =
@@ -93,7 +111,7 @@ export function TacticalMap({
           maximumZ={19}
           minimumZ={0}
           tileSize={256}
-          urlTemplate={OSM_TILE_URL_TEMPLATE}
+          urlTemplate={baseLayer === "satellite" ? ESRI_SATELLITE_TILE_TEMPLATE : OSM_TILE_URL_TEMPLATE}
           zIndex={-1}
         />
         {polygons.map((poly) => (
@@ -125,6 +143,14 @@ export function TacticalMap({
             onPress={() => showCallout(line.title, line.subtitle)}
           />
         ))}
+        {userLocation ? (
+          <Marker
+            coordinate={{ latitude: userLocation.lat, longitude: userLocation.lng }}
+            title="You"
+            description="Live position"
+            pinColor="#1e88e5"
+          />
+        ) : null}
         {pins.map((p) => (
           <Marker
             key={p.id}
