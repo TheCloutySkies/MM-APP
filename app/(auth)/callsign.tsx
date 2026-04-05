@@ -59,10 +59,12 @@ export default function CallsignScreen() {
     }
     setBusy(true);
     try {
-      const { error: upErr } = await supabase
+      const { data: updatedRows, error: upErr } = await supabase
         .from("mm_profiles")
         .update({ username: normalized, callsign_ok: true })
-        .eq("id", profileId);
+        .eq("id", profileId)
+        .select("id");
+
       if (upErr) {
         const code = (upErr as { code?: string }).code;
         const dup =
@@ -76,6 +78,32 @@ export default function CallsignScreen() {
         }
         return;
       }
+
+      if (!updatedRows?.length) {
+        const { error: insErr } = await supabase.from("mm_profiles").insert({
+          id: profileId,
+          username: normalized,
+          callsign_ok: true,
+          access_key_hash: null,
+        });
+        if (insErr) {
+          const code = (insErr as { code?: string }).code;
+          const dup =
+            code === "23505" ||
+            insErr.message.toLowerCase().includes("unique") ||
+            insErr.message.toLowerCase().includes("duplicate");
+          if (dup) {
+            setError("That handle is already taken. Pick another.");
+          } else {
+            setError(
+              insErr.message ||
+                "Could not create your profile. Try signing out and back in, or contact support.",
+            );
+          }
+          return;
+        }
+      }
+
       await syncMmProfileRow();
       await goNext();
     } catch (e) {

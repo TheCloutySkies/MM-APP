@@ -108,6 +108,35 @@ async function loadMmProfileRow(
   return { username: data.username as string, callsignOk: Boolean(data.callsign_ok) };
 }
 
+/** Match DB trigger placeholder: pending- + first 12 hex chars of id (no dashes). */
+function pendingUsernameForAuthUser(profileId: string): string {
+  return `pending-${profileId.replace(/-/g, "").slice(0, 12)}`;
+}
+
+/**
+ * Email/password users must have an mm_profiles row (id = auth.users.id). If the DB trigger
+ * missed (old accounts, failed migration), insert is allowed via RLS and fixes callsign + API calls.
+ */
+async function ensureMmProfileRowForAuth(
+  supabase: SupabaseClient,
+  profileId: string,
+): Promise<{ username: string; callsignOk: boolean } | null> {
+  const existing = await loadMmProfileRow(supabase, profileId);
+  if (existing) return existing;
+
+  const { error } = await supabase.from("mm_profiles").insert({
+    id: profileId,
+    username: pendingUsernameForAuthUser(profileId),
+    access_key_hash: null,
+    callsign_ok: false,
+  });
+
+  if (error && error.code !== "23505") {
+    return null;
+  }
+  return await loadMmProfileRow(supabase, profileId);
+}
+
 /**
  * Hydration must use the same recovery path the client uses for storage-backed sessions.
  * On web, `onAuthStateChange` → `INITIAL_SESSION` tracks GoTrue initialization; some WebKit
@@ -192,7 +221,9 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
         profileId = session.user.id;
         sessionSource = "auth";
         supabase = getAuthSupabase();
-        const row = await loadMmProfileRow(supabase, profileId);
+        const row =
+          (await loadMmProfileRow(supabase, profileId)) ??
+          (await ensureMmProfileRowForAuth(supabase, profileId));
         if (row) {
           username = row.username;
           callsignOk = row.callsignOk;
@@ -283,7 +314,11 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       source === "auth" ? getAuthSupabase() : await createMMSupabase(loginToken);
     let displayUsername = username;
     let callsignOk = true;
-    const row = await loadMmProfileRow(supabase, profileId);
+    const row =
+      source === "auth"
+        ? (await loadMmProfileRow(supabase, profileId)) ??
+          (await ensureMmProfileRowForAuth(supabase, profileId))
+        : await loadMmProfileRow(supabase, profileId);
     if (row) {
       displayUsername = row.username;
       callsignOk = row.callsignOk;
