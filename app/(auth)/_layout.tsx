@@ -12,6 +12,7 @@ export default function AuthLayout() {
   return (
     <Stack screenOptions={authScreenOptions}>
       <Stack.Screen name="login" />
+      <Stack.Screen name="callsign" />
       <Stack.Screen name="setup" />
       <Stack.Screen name="unlock" />
     </Stack>

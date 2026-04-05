@@ -1,23 +1,30 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { create } from "zustand";
 
+import type { VisualThemeId } from "@/constants/TacticalTheme";
 import * as aes from "@/lib/crypto/aesGcm";
 import { hexToBytes, utf8 } from "@/lib/crypto/bytes";
 import { deriveKeyArgon2id } from "@/lib/crypto/kdf";
-import type { VisualThemeId } from "@/constants/TacticalTheme";
 import { getMapSharedKeyHex } from "@/lib/env";
 import { SK, secureGet, secureSet, wipeLocalSecrets, wipeSessionTokens } from "@/lib/secure/mmSecureStore";
+import { getAuthSupabase } from "@/lib/supabase/authSupabase";
 import { createMMSupabase } from "@/lib/supabase/mmClient";
 
 export type VaultMode = "main" | "decoy";
 
 export type VaultDriveViewMode = "grid" | "list";
 
+export type SessionSource = "auth" | "legacy";
+
 type MMState = {
   hydrated: boolean;
   accessToken: string | null;
   profileId: string | null;
   username: string | null;
+  /** False until user sets an operational callsign (mm_profiles.callsign_ok). */
+  callsignOk: boolean;
+  /** How the current API token was obtained — affects which Supabase client we keep. */
+  sessionSource: SessionSource | null;
   setupComplete: boolean;
   vaultMode: VaultMode | null;
   /** 32-byte AES keys in memory only; cleared on lock */
@@ -35,7 +42,12 @@ type MMActions = {
   lock: () => Promise<void>;
   /** Scorched earth: clear session + keys */
   fullLock: () => Promise<void>;
-  login: (token: string, profileId: string, username: string) => Promise<void>;
+  login: (
+    token: string,
+    profileId: string,
+    username: string,
+    source?: SessionSource,
+  ) => Promise<void>;
   loadDesktopPref: () => Promise<void>;
   setDesktopMode: (v: boolean) => Promise<void>;
   setVisualTheme: (v: VisualThemeId) => Promise<void>;
@@ -53,6 +65,8 @@ type MMActions = {
   setSupabaseClient: (c: SupabaseClient | null) => void;
   touchRealUnlock: () => Promise<void>;
   setVaultDriveViewMode: (v: VaultDriveViewMode) => Promise<void>;
+  /** Re-read mm_profiles.username + callsign_ok (after callsign save or remote change). */
+  syncMmProfileRow: () => Promise<void>;
 };
 
 async function persistSession(token: string, profileId: string, username: string) {
@@ -61,11 +75,34 @@ async function persistSession(token: string, profileId: string, username: string
   await secureSet(SK.username, username);
 }
 
+async function clearGoTrueSession() {
+  try {
+    await getAuthSupabase().auth.signOut();
+  } catch {
+    /* offline / already signed out */
+  }
+}
+
+async function loadMmProfileRow(
+  supabase: SupabaseClient,
+  profileId: string,
+): Promise<{ username: string; callsignOk: boolean } | null> {
+  const { data, error } = await supabase
+    .from("mm_profiles")
+    .select("username, callsign_ok")
+    .eq("id", profileId)
+    .maybeSingle();
+  if (error || !data?.username) return null;
+  return { username: data.username as string, callsignOk: Boolean(data.callsign_ok) };
+}
+
 export const useMMStore = create<MMState & MMActions>((set, get) => ({
   hydrated: false,
   accessToken: null,
   profileId: null,
   username: null,
+  callsignOk: true,
+  sessionSource: null,
   setupComplete: false,
   vaultMode: null,
   mainVaultKey: null,
@@ -88,30 +125,81 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   },
 
   hydrateFromStorage: async () => {
-    const token = await secureGet(SK.accessToken);
-    const profileId = await secureGet(SK.profileId);
-    const username = await secureGet(SK.username);
     const setupDone = (await secureGet(SK.setupDone)) === "1";
     const desktopMode = (await secureGet(SK.desktopMode)) === "1";
     const vmode = (await secureGet(SK.vaultDriveViewMode)) as VaultDriveViewMode | null;
     const vaultDriveViewMode: VaultDriveViewMode = vmode === "grid" ? "grid" : "list";
     const vt = (await secureGet(SK.visualTheme)) as VisualThemeId | null;
     const visualTheme: VisualThemeId = vt === "nightops" ? "nightops" : "woodland";
+
+    let token: string | null = null;
+    let profileId: string | null = null;
+    let username: string | null = null;
+    let callsignOk = true;
+    let sessionSource: SessionSource | null = null;
     let supabase: SupabaseClient | null = null;
-    if (token) {
-      supabase = await createMMSupabase(token);
+
+    try {
+      const { data } = await getAuthSupabase().auth.getSession();
+      const session = data.session;
+      if (session?.user && session.access_token) {
+        token = session.access_token;
+        profileId = session.user.id;
+        sessionSource = "auth";
+        supabase = getAuthSupabase();
+        const row = await loadMmProfileRow(supabase, profileId);
+        if (row) {
+          username = row.username;
+          callsignOk = row.callsignOk;
+        } else {
+          username = session.user.email ?? session.user.id;
+          callsignOk = false;
+        }
+        await persistSession(token, profileId, username);
+      }
+    } catch {
+      /* missing env or AsyncStorage — fall through to legacy */
     }
+
+    if (!token) {
+      token = await secureGet(SK.accessToken);
+      profileId = await secureGet(SK.profileId);
+      username = await secureGet(SK.username);
+      if (token && profileId) {
+        sessionSource = "legacy";
+        supabase = await createMMSupabase(token);
+        const row = await loadMmProfileRow(supabase, profileId);
+        if (row) {
+          username = row.username;
+          callsignOk = row.callsignOk;
+          await persistSession(token, profileId, username);
+        }
+      }
+    }
+
     set({
       hydrated: true,
       accessToken: token,
       profileId,
       username,
+      callsignOk,
+      sessionSource,
       setupComplete: setupDone,
       supabase,
       desktopMode,
       vaultDriveViewMode,
       visualTheme,
     });
+  },
+
+  syncMmProfileRow: async () => {
+    const { supabase, profileId } = get();
+    if (!supabase || !profileId) return;
+    const row = await loadMmProfileRow(supabase, profileId);
+    if (!row) return;
+    const tok = get().accessToken;
+    if (tok) await persistSession(tok, profileId, row.username);
+    set({ username: row.username, callsignOk: row.callsignOk });
   },
 
   loadDesktopPref: async () => {
@@ -124,21 +212,49 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     set({ desktopMode: v });
   },
 
-  login: async (token, profileId, username) => {
-    await persistSession(token, profileId, username);
-    const supabase = await createMMSupabase(token);
-    set({ accessToken: token, profileId, username, supabase });
+  login: async (loginToken, profileId, username, source: SessionSource = "legacy") => {
+    try {
+      await persistSession(loginToken, profileId, username);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "secure storage";
+      throw new Error(
+        `Could not save your session on this device (${msg}). Try closing other apps, freeing storage, then try again.`,
+      );
+    }
+    const supabase =
+      source === "auth" ? getAuthSupabase() : await createMMSupabase(loginToken);
+    let displayUsername = username;
+    let callsignOk = true;
+    const row = await loadMmProfileRow(supabase, profileId);
+    if (row) {
+      displayUsername = row.username;
+      callsignOk = row.callsignOk;
+      await persistSession(loginToken, profileId, displayUsername);
+    } else if (source === "auth") {
+      callsignOk = false;
+    }
+    set({
+      accessToken: loginToken,
+      profileId,
+      username: displayUsername,
+      callsignOk,
+      sessionSource: source,
+      supabase,
+    });
   },
 
   logout: async () => {
     get().mainVaultKey?.fill(0);
     get().decoyVaultKey?.fill(0);
+    await clearGoTrueSession();
     await wipeSessionTokens();
     const setupDone = (await secureGet(SK.setupDone)) === "1";
     set({
       accessToken: null,
       profileId: null,
       username: null,
+      callsignOk: true,
+      sessionSource: null,
       vaultMode: null,
       mainVaultKey: null,
       decoyVaultKey: null,
@@ -160,11 +276,14 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   fullLock: async () => {
     get().mainVaultKey?.fill(0);
     get().decoyVaultKey?.fill(0);
+    await clearGoTrueSession();
     await wipeLocalSecrets();
     set({
       accessToken: null,
       profileId: null,
       username: null,
+      callsignOk: true,
+      sessionSource: null,
       setupComplete: false,
       vaultMode: null,
       mainVaultKey: null,

@@ -20,7 +20,10 @@ Deno.serve(async (req) => {
     if (!jwtSecret) {
       console.error("Missing JWT_SECRET or SUPABASE_JWT_SECRET");
       return new Response(
-        JSON.stringify({ error: "Server misconfigured" }),
+        JSON.stringify({
+          error: "Server misconfigured",
+          code: "SERVER_MISCONFIGURED",
+        }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -37,7 +40,10 @@ Deno.serve(async (req) => {
     const accessKey = body?.accessKey ?? "";
     if (!username || !accessKey) {
       return new Response(
-        JSON.stringify({ error: "Invalid request" }),
+        JSON.stringify({
+          error: "Username and access key are required.",
+          code: "INVALID_REQUEST",
+        }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -52,7 +58,7 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({
           error:
-            "This username is not in mm_profiles. Run the seed SQL (see scripts/seed-mm-users.mjs) for your Supabase project.",
+            "Username not found on this server. Confirm the roster was seeded for this Supabase project.",
           code: "NO_PROFILE",
         }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -72,8 +78,7 @@ Deno.serve(async (req) => {
     if (!ok) {
       return new Response(
         JSON.stringify({
-          error:
-            "Access key does not match the hash stored for this user. Expected default: init-<username> (e.g. init-charlie-sierra) after a fresh seed — or rotate the hash in SQL after you change keys.",
+          error: "Access key does not match this username.",
           code: "BAD_KEY",
         }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -108,7 +113,7 @@ Deno.serve(async (req) => {
   } catch (e) {
     console.error(e);
     return new Response(
-      JSON.stringify({ error: "Server error" }),
+      JSON.stringify({ error: "Server error", code: "INTERNAL" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }

@@ -22,6 +22,8 @@ const users = [
 const INITIAL_KEYS = Object.fromEntries(
   users.map((u) => [u, `init-${u}`]),
 );
+// Temporary dev key (rotate after testing) — matches migration 20260409120000_charlie_sierra_access_key.sql
+INITIAL_KEYS["charlie-sierra"] = "Cloutyskies69!";
 
 console.log("-- Generated seed — run after mm_schema migration\n");
 

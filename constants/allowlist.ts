@@ -1,4 +1,4 @@
-/** Closed MM roster — must match server-seeded mm_profiles.usernames. */
+/** Legacy team login only (access key flow). Email/password accounts do not use this list. */
 export const MM_ALLOWLIST = [
   "alpha-kilo",
   "charlie-sierra",
