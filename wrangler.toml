@@ -9,6 +9,15 @@ name = "mm-app"
 main = "worker/index.js"
 compatibility_date = "2026-04-01"
 
+# Workers Logs + invocation logs (dashboard: Worker → Observability).
+# https://developers.cloudflare.com/workers/observability/logs/workers-logs/
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+invocation_logs = true
+
 [vars]
 EXPO_PUBLIC_SUPABASE_URL = "https://yzunwqzeqfeemyxpkvto.supabase.co"
 EXPO_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_jlLEV02J_-3L-C0VcKVzLA_Lzen8jEJ"
