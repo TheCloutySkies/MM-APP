@@ -1,0 +1,8 @@
+# Minimal Supabase CLI config. Link your project with `supabase link`.
+project_id = "mm-app-local"
+
+[api]
+enabled = true
+
+[functions.mm-login]
+verify_jwt = false
