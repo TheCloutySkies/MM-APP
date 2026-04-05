@@ -8,6 +8,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "export:web": "expo export -p web",
+    "deploy:web": "npm run export:web && wrangler deploy",
     "supabase:bootstrap": "bash scripts/supabase-bootstrap.sh",
     "supabase:seed-sql": "node scripts/seed-mm-users.mjs"
   },

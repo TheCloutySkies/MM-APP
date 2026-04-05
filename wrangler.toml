@@ -1,10 +1,17 @@
 # Cloudflare Workers + static export from Expo (`npm run export:web` → ./dist).
 # `main` + ASSETS binding replaces any dashboard "Hello world" placeholder.
 # https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/
+#
+# Public Supabase client vars are injected into HTML as window.__MM_EXPO_PUBLIC__ (see worker/index.js).
+# Override in Dashboard → Workers → mm-app → Settings → Variables if you do not want them in this file.
 
 name = "mm-app"
 main = "worker/index.js"
 compatibility_date = "2026-04-01"
+
+[vars]
+EXPO_PUBLIC_SUPABASE_URL = "https://yzunwqzeqfeemyxpkvto.supabase.co"
+EXPO_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_jlLEV02J_-3L-C0VcKVzLA_Lzen8jEJ"
 
 [assets]
 directory = "./dist"
