@@ -40,7 +40,8 @@ export default function UnlockScreen() {
   };
 
   return (
-    <View style={[styles.box, { backgroundColor: TacticalPalette.matteBlack }]}>
+    <View style={[styles.shell, { backgroundColor: TacticalPalette.matteBlack }]}>
+      <View style={styles.box}>
       <Text
         accessibilityRole="header"
         style={[
@@ -100,20 +101,26 @@ export default function UnlockScreen() {
         ]}>
         <Text style={styles.btnTx}>Unlock</Text>
       </Pressable>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  shell: {
+    flex: 1,
+    width: "100%",
+    alignItems: "center",
+  },
   box: {
     flex: 1,
+    width: "100%",
+    maxWidth: 480,
+    alignSelf: "center",
     padding: 24,
     justifyContent: "center",
     gap: 14,
     alignItems: "stretch",
-    maxWidth: 480,
-    alignSelf: "center",
-    width: "100%",
   },
   mmMark: {
     fontWeight: "900",

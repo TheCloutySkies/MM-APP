@@ -7,17 +7,17 @@ import {
     Text,
     TextInput,
     View,
-    useColorScheme,
+    useWindowDimensions,
 } from "react-native";
 
-import Colors from "@/constants/Colors";
+import { TacticalPalette } from "@/constants/TacticalTheme";
 import { isAllowlistedUsername } from "@/constants/allowlist";
 import { invokeMmLogin } from "@/lib/supabase/mmClient";
 import { useMMStore } from "@/store/mmStore";
 
 export default function LoginScreen() {
-  const scheme = useColorScheme() ?? "light";
-  const palette = Colors[scheme];
+  const { width } = useWindowDimensions();
+  const mmSize = Math.min(168, Math.max(88, width * 0.32));
   const router = useRouter();
   const login = useMMStore((s) => s.login);
   const setupComplete = useMMStore((s) => s.setupComplete);
@@ -45,51 +45,113 @@ export default function LoginScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <Text style={[styles.hint, { color: palette.text }]}>
-        Closed roster. No self-service registration.
-      </Text>
-      <TextInput
-        placeholder="Username"
-        placeholderTextColor="#888"
-        autoCapitalize="none"
-        autoCorrect={false}
-        value={user}
-        onChangeText={setUser}
-        style={[styles.input, { color: palette.text, borderColor: palette.tabIconDefault }]}
-      />
-      <TextInput
-        placeholder="Access key"
-        placeholderTextColor="#888"
-        secureTextEntry
-        value={key}
-        onChangeText={setKey}
-        style={[styles.input, { color: palette.text, borderColor: palette.tabIconDefault }]}
-      />
-      <Pressable
-        accessibilityRole="button"
-        disabled={busy}
-        onPress={() => void submit()}
-        style={({ pressed }) => [
-          styles.btn,
-          { backgroundColor: pressed ? palette.tabIconSelected : palette.tint, opacity: busy ? 0.6 : 1 },
-        ]}>
-        <Text style={styles.btnText}>Enter vault</Text>
-      </Pressable>
+    <View style={[styles.shell, { backgroundColor: TacticalPalette.matteBlack }]}>
+      <View style={styles.box}>
+        <Text style={styles.kicker}>ACCESS</Text>
+        <Text
+          accessibilityRole="header"
+          style={[
+            styles.mmMark,
+            {
+              fontSize: mmSize,
+              lineHeight: mmSize * 1.02,
+              color: TacticalPalette.bone,
+            },
+          ]}>
+          MM
+        </Text>
+        <Text style={[styles.note, { color: TacticalPalette.boneMuted }]}>
+          Closed roster. No self-service registration. Username + team access key.
+        </Text>
+        <TextInput
+          placeholder="Username"
+          placeholderTextColor={TacticalPalette.boneMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={user}
+          onChangeText={setUser}
+          style={[
+            styles.input,
+            {
+              borderColor: TacticalPalette.border,
+              color: TacticalPalette.bone,
+              backgroundColor: TacticalPalette.charcoal,
+            },
+          ]}
+        />
+        <TextInput
+          placeholder="Access key"
+          placeholderTextColor={TacticalPalette.boneMuted}
+          secureTextEntry
+          value={key}
+          onChangeText={setKey}
+          style={[
+            styles.input,
+            {
+              borderColor: TacticalPalette.border,
+              color: TacticalPalette.bone,
+              backgroundColor: TacticalPalette.charcoal,
+            },
+          ]}
+        />
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={() => void submit()}
+          style={({ pressed }) => [
+            styles.btn,
+            {
+              backgroundColor: pressed ? TacticalPalette.accentDim : TacticalPalette.accent,
+              opacity: busy ? 0.6 : 1,
+            },
+          ]}>
+          <Text style={styles.btnTx}>Enter vault</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 24, justifyContent: "center", gap: 16 },
-  hint: { fontSize: 14, marginBottom: 8 },
+  shell: {
+    flex: 1,
+    width: "100%",
+    alignItems: "center",
+  },
+  /** Same constraints as unlock — readable width on desktop, full width on phones */
+  box: {
+    flex: 1,
+    width: "100%",
+    maxWidth: 480,
+    alignSelf: "center",
+    padding: 24,
+    justifyContent: "center",
+    gap: 14,
+    alignItems: "stretch",
+  },
+  kicker: {
+    color: TacticalPalette.coyote,
+    fontSize: 11,
+    letterSpacing: 2,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: -4,
+  },
+  mmMark: {
+    fontWeight: "900",
+    letterSpacing: -6,
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  note: { marginBottom: 8, fontSize: 14, textAlign: "center", lineHeight: 20 },
   input: {
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
+    paddingVertical: 14,
+    fontSize: 18,
+    minHeight: 52,
   },
   btn: { paddingVertical: 16, borderRadius: 12, alignItems: "center" },
-  btnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  btnTx: { color: TacticalPalette.bone, fontWeight: "700", fontSize: 16 },
 });
