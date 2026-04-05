@@ -13,10 +13,17 @@ export function getSupabaseUrl(): string {
   );
 }
 
+/**
+ * Public Supabase key for the client + `mm-login` calls.
+ * Use the **anon** JWT or the dashboard **publishable** key — both work with `createClient` for this app.
+ * (Next.js templates use `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`; in Expo copy that value into one of the vars below.)
+ */
 export function getSupabaseAnonKey(): string {
   return (
     readExtra("EXPO_PUBLIC_SUPABASE_ANON_KEY") ??
+    readExtra("EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY") ??
     process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
+    process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY ??
     ""
   );
 }

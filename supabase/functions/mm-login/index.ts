@@ -50,7 +50,11 @@ Deno.serve(async (req) => {
 
     if (error || !profile) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
+        JSON.stringify({
+          error:
+            "This username is not in mm_profiles. Run the seed SQL (see scripts/seed-mm-users.mjs) for your Supabase project.",
+          code: "NO_PROFILE",
+        }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -67,7 +71,11 @@ Deno.serve(async (req) => {
     }
     if (!ok) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
+        JSON.stringify({
+          error:
+            "Access key does not match the hash stored for this user. Expected default: init-<username> (e.g. init-charlie-sierra) after a fresh seed — or rotate the hash in SQL after you change keys.",
+          code: "BAD_KEY",
+        }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
