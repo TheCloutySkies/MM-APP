@@ -38,8 +38,8 @@ If the build log shows **Success: Build command completed** and **Exported: dist
 
 If you created a **Worker** (e.g. `*.workers.dev`) instead of **Pages**, the build must upload **`dist/`** as [static assets](https://developers.cloudflare.com/workers/static-assets/). This repo includes **`wrangler.toml`**: it sets `assets.directory` to `./dist` and `not_found_handling = "single-page-application"` so deep links (e.g. `/login`) work.
 
-- **Root directory** in the dashboard must be the **repo root** (where `package.json` and `wrangler.toml` live), **not** `dist`.
-- After deploy, if you still see **Hello world**, the Worker was only running script code and **no asset bundle** — fix by pushing `wrangler.toml` and redeploying so `npx wrangler versions upload` picks it up.
+- **Root directory** in the dashboard must be the **repo root** (where `package.json`, `wrangler.toml`, and **`worker/`** live), **not** `dist`.
+- After deploy, if you still see **Hello world**, the deploy is still using a **placeholder Worker** (or `dist/` was empty at upload time). This repo sets **`main = "worker/index.js"`** and **`assets.binding = "ASSETS"`** so the bundle serves files from `./dist`. In the dashboard, remove any **Quick edit / inline** Worker script that only returns “Hello world”, then redeploy — Git should own the Worker source.
 - **`name` in `wrangler.toml`** is `mm-app`; change it if your Worker uses a different name in the dashboard.
 
 ### Cloudflare Pages (no Git)

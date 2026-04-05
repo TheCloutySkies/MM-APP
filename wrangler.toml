@@ -1,10 +1,12 @@
 # Cloudflare Workers + static export from Expo (`npm run export:web` → ./dist).
-# Without [assets], only the Worker script runs — e.g. a default "Hello world".
+# `main` + ASSETS binding replaces any dashboard "Hello world" placeholder.
 # https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/
 
 name = "mm-app"
+main = "worker/index.js"
 compatibility_date = "2026-04-01"
 
 [assets]
 directory = "./dist"
+binding = "ASSETS"
 not_found_handling = "single-page-application"
