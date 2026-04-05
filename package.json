@@ -10,7 +10,8 @@
     "export:web": "expo export -p web",
     "deploy:web": "npm run export:web && wrangler deploy",
     "supabase:bootstrap": "bash scripts/supabase-bootstrap.sh",
-    "supabase:seed-sql": "node scripts/seed-mm-users.mjs"
+    "supabase:seed-sql": "node scripts/seed-mm-users.mjs",
+    "supabase:repair-profiles": "supabase db query -f scripts/repair-mm-profiles-for-auth-users.sql --linked"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

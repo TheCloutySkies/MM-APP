@@ -1,4 +1,5 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Session, SupabaseClient } from "@supabase/supabase-js";
+import { Platform } from "react-native";
 import { create } from "zustand";
 
 import {
@@ -107,6 +108,36 @@ async function loadMmProfileRow(
   return { username: data.username as string, callsignOk: Boolean(data.callsign_ok) };
 }
 
+/**
+ * Hydration must use the same recovery path the client uses for storage-backed sessions.
+ * On web, `onAuthStateChange` → `INITIAL_SESSION` tracks GoTrue initialization; some WebKit
+ * builds share reports of `getSession()` disagreeing with that first paint window (supabase-js#1560 class of issues).
+ */
+async function resolveHydrateAuthSession(client: SupabaseClient): Promise<Session | null> {
+  if (Platform.OS !== "web") {
+    const { data } = await client.auth.getSession();
+    return data.session ?? null;
+  }
+  return await new Promise<Session | null>((resolve) => {
+    let finished = false;
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const { data } = client.auth.onAuthStateChange((event, session) => {
+      if (event !== "INITIAL_SESSION") return;
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeoutId);
+      data.subscription.unsubscribe();
+      resolve(session);
+    });
+    timeoutId = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      data.subscription.unsubscribe();
+      resolve(null);
+    }, 10_000);
+  });
+}
+
 export const useMMStore = create<MMState & MMActions>((set, get) => ({
   hydrated: false,
   accessToken: null,
@@ -154,8 +185,8 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     let supabase: SupabaseClient | null = null;
 
     try {
-      const { data } = await getAuthSupabase().auth.getSession();
-      const session = data.session;
+      const authClient = getAuthSupabase();
+      const session = await resolveHydrateAuthSession(authClient);
       if (session?.user && session.access_token) {
         token = session.access_token;
         profileId = session.user.id;
