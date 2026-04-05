@@ -39,6 +39,9 @@ supabase/.temp/
 supabase/.generated-seed.sql
 supabase/.secrets.env.tmp
 
+# Cloudflare Wrangler (local state)
+.wrangler/
+
 # typescript
 *.tsbuildinfo
 

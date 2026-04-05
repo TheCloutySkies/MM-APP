@@ -53,7 +53,8 @@
     "@types/react": "~19.1.0",
     "argon2": "^0.44.0",
     "react-test-renderer": "19.1.0",
-    "typescript": "~5.9.2"
+    "typescript": "~5.9.2",
+    "wrangler": "^4.28.0"
   },
   "private": true
 }

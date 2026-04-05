@@ -25,11 +25,22 @@ This writes to **`dist/`**. Deploy **the contents of `dist`**, not the whole rep
 2. Cloudflare Dashboard → **Workers & Pages** → **Create** → **Pages** → Connect to Git.
 3. Build settings:
    - **Framework preset:** None
-   - **Build command:** `npm run export:web`
+   - **Build command:** `npm run export:web` (optional: `npm install && npm run export:web` if your project needs it)
    - **Build output directory:** `dist`
-   - **Root directory:** `/` (repo root)
+   - **Root directory:** `/` means repo root in the Cloudflare UI — not the same as “deploy command”
+   - **Deploy command:** leave **blank**. Do not enter `/`, `.`, or `npx wrangler pages deploy` unless you fully configure wrangler (project name + API token). A lone `/` causes: `Executing user deploy command: /` → `Permission denied`.
 4. **Environment variables** (Production + Preview): add every `EXPO_PUBLIC_*` you use locally (see below). Redeploy after changing them.
 5. **Node version:** set **20** (or 22) in Pages → Settings → Environment variables as `NODE_VERSION=20` if builds fail on default Node.
+
+If the build log shows **Success: Build command completed** and **Exported: dist**, but deploy fails, the problem is almost always a non-empty **Deploy command**. Delete it and redeploy.
+
+### Cloudflare **Workers** (Git) — not Pages
+
+If you created a **Worker** (e.g. `*.workers.dev`) instead of **Pages**, the build must upload **`dist/`** as [static assets](https://developers.cloudflare.com/workers/static-assets/). This repo includes **`wrangler.toml`**: it sets `assets.directory` to `./dist` and `not_found_handling = "single-page-application"` so deep links (e.g. `/login`) work.
+
+- **Root directory** in the dashboard must be the **repo root** (where `package.json` and `wrangler.toml` live), **not** `dist`.
+- After deploy, if you still see **Hello world**, the Worker was only running script code and **no asset bundle** — fix by pushing `wrangler.toml` and redeploying so `npx wrangler versions upload` picks it up.
+- **`name` in `wrangler.toml`** is `mm-app`; change it if your Worker uses a different name in the dashboard.
 
 ### Cloudflare Pages (no Git)
 
