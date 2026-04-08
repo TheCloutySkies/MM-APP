@@ -30,7 +30,7 @@ import type { MapBaseLayerId, MapPointerMode, MapUserLocation } from "@/componen
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
-import { geocodeSearch, type GeocodeHit } from "@/lib/geocode";
+import { geocodeSearch } from "@/lib/geocode";
 import {
     buildTacticalPayload,
     normalizeTacticalPayload,
@@ -57,6 +57,97 @@ const MIN_SHEET_H = 56;
 const SHEET_X_CLAMP = 110;
 /** Web + Settings → desktop layout: dock map tools as a right sidebar instead of a bottom sheet. */
 const DESKTOP_MAP_TOOLS_DOCK_MIN_W = 920;
+
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
+function CoordWidget(props: {
+  tint: string;
+  onTintLabel: string;
+  border: string;
+  text: string;
+  textMuted: string;
+  label: string;
+  fmt: "latlng" | "mgrs";
+  onToggleFmt: () => void;
+}) {
+  const { width: winW, height: winH } = useWindowDimensions();
+  const start = useRef({ x: 16, y: 96, w: 230, h: 92 });
+  const [pos, setPos] = useState(start.current);
+  const [min, setMin] = useState(false);
+
+  const drag = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          start.current = pos;
+        },
+        onPanResponderMove: (_, g) => {
+          if (min) return;
+          const nx = clamp(start.current.x + g.dx, 6, Math.max(6, winW - pos.w - 6));
+          const ny = clamp(start.current.y + g.dy, 6, Math.max(6, winH - pos.h - 6));
+          setPos((p) => ({ ...p, x: nx, y: ny }));
+        },
+      }),
+    [pos, winW, winH, min],
+  );
+
+  const resizeSE = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          start.current = pos;
+        },
+        onPanResponderMove: (_, g) => {
+          const nw = clamp(start.current.w + g.dx, 190, Math.min(420, winW - start.current.x - 6));
+          const nh = clamp(start.current.h + g.dy, 72, Math.min(220, winH - start.current.y - 6));
+          setPos((p) => ({ ...p, w: nw, h: nh }));
+        },
+      }),
+    [pos, winW, winH],
+  );
+
+  return (
+    <View
+      style={[
+        styles.coordBox,
+        {
+          left: pos.x,
+          top: pos.y,
+          width: min ? 170 : pos.w,
+          height: min ? 44 : pos.h,
+          borderColor: props.border,
+          backgroundColor: TacticalPalette.charcoal,
+        },
+      ]}>
+      <View {...drag.panHandlers} style={styles.coordHead}>
+        <Text style={[styles.coordTitle, { color: props.textMuted }]}>Crosshair</Text>
+        <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
+          <Pressable onPress={props.onToggleFmt} style={styles.coordPill}>
+            <Text style={[styles.coordPillTx, { color: props.tint }]}>{props.fmt === "mgrs" ? "MGRS" : "Lat/Lng"}</Text>
+          </Pressable>
+          <Pressable onPress={() => setMin((v) => !v)} style={styles.coordPill}>
+            <Text style={[styles.coordPillTx, { color: props.textMuted }]}>{min ? "▢" : "—"}</Text>
+          </Pressable>
+        </View>
+      </View>
+      {!min ? (
+        <View style={styles.coordBody}>
+          <Text style={[styles.coordVal, { color: props.text }]} numberOfLines={2}>
+            {props.label}
+          </Text>
+          <Text style={[styles.coordHint, { color: props.textMuted }]}>Drag header · resize corner</Text>
+        </View>
+      ) : null}
+      {!min ? <View {...resizeSE.panHandlers} style={styles.resizeCorner} /> : null}
+    </View>
+  );
+}
 
 export default function MapScreen() {
   const router = useRouter();
@@ -104,15 +195,19 @@ export default function MapScreen() {
   const [osintFirms, setOsintFirms] = useState(false);
   const [supermapPins, setSupermapPins] = useState<MapPin[]>([]);
   const [supermapPolylines, setSupermapPolylines] = useState<MapPolylineOverlay[]>([]);
-  const [baseLayer, setBaseLayer] = useState<MapBaseLayerId>("osm");
+  const [baseLayer, setBaseLayer] = useState<MapBaseLayerId>("osm_dark");
   const [userLoc, setUserLoc] = useState<MapUserLocation | null>(null);
   const [pointDropMode, setPointDropMode] = useState(false);
+  const [center, setCenter] = useState<{ lat: number; lng: number; zoom?: number } | null>(null);
+  const [centerFmt, setCenterFmt] = useState<"latlng" | "mgrs">("latlng");
+  const [hudSearchOpen, setHudSearchOpen] = useState(true);
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [hudQuery, setHudQuery] = useState("");
+  const [hudSearching, setHudSearching] = useState(false);
 
   const flySeq = useRef(0);
   const [flyTo, setFlyTo] = useState<MapFlyToRequest | null>(null);
-  const [placeQuery, setPlaceQuery] = useState("");
-  const [placeHits, setPlaceHits] = useState<GeocodeHit[]>([]);
-  const [placeSearching, setPlaceSearching] = useState(false);
+  // (place search moved to HUD)
 
   const dockToolsRight = Platform.OS === "web" && desktopMode && windowW >= DESKTOP_MAP_TOOLS_DOCK_MIN_W;
   const compactToolChips = !dockToolsRight && windowW < 600;
@@ -164,6 +259,25 @@ export default function MapScreen() {
   const flyToCoords = (lat: number, lng: number, zoom = 10) => {
     flySeq.current += 1;
     setFlyTo({ lat, lng, zoom, seq: flySeq.current });
+  };
+
+  const runHudSearch = async () => {
+    const q = hudQuery.trim();
+    if (!q) return;
+    setHudSearching(true);
+    try {
+      const hits = await geocodeSearch(q, 6);
+      if (hits[0]) {
+        flyToCoords(hits[0].lat, hits[0].lng, 11);
+        setLayersOpen(false);
+      } else {
+        Alert.alert("Search", "No results.");
+      }
+    } catch (e) {
+      Alert.alert("Search", e instanceof Error ? e.message : "Search failed");
+    } finally {
+      setHudSearching(false);
+    }
   };
 
   const loadMarkers = useCallback(async () => {
@@ -586,20 +700,7 @@ export default function MapScreen() {
     return list;
   }, [tacticalPolygons, draftPolyPreview]);
 
-  const runPlaceSearch = async () => {
-    const q = placeQuery.trim();
-    if (!q) return;
-    setPlaceSearching(true);
-    try {
-      const hits = await geocodeSearch(q, 8);
-      setPlaceHits(hits);
-      if (hits[0]) flyToCoords(hits[0].lat, hits[0].lng, 10);
-    } catch (e) {
-      Alert.alert("Places", e instanceof Error ? e.message : "Search failed");
-    } finally {
-      setPlaceSearching(false);
-    }
-  };
+  // (place search moved to HUD)
 
   const sheetPan = useMemo(
     () =>
@@ -680,8 +781,28 @@ export default function MapScreen() {
       </ScrollView>
     );
 
+  const mgrsLabel = useMemo(() => {
+    if (!center) return "";
+    try {
+      // mgrs.forward expects [lon, lat]
+      // dynamic import to keep bundle light
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("mgrs") as { forward: (lngLat: [number, number], accuracy?: number) => string };
+      return m.forward([center.lng, center.lat], 5);
+    } catch {
+      return "";
+    }
+  }, [center?.lat, center?.lng]);
+
+  const centerLabel =
+    !center
+      ? "—"
+      : centerFmt === "mgrs" && mgrsLabel
+        ? mgrsLabel
+        : `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
+
   const mapNode = (
-    <>
+    <View style={{ flex: 1, minHeight: 0 }}>
       <TacticalMap
         pins={mergedPins}
         polylines={mapPolylines}
@@ -692,13 +813,104 @@ export default function MapScreen() {
         baseLayer={baseLayer}
         userLocation={userLoc}
         pointerMode={mapPointerMode}
+        onCenterChange={(lat, lng, zoom) => setCenter({ lat, lng, zoom })}
       />
+      {/* Crosshair */}
+      <View pointerEvents="none" style={styles.crosshairWrap}>
+        <View style={[styles.crosshairDot, { borderColor: p.tint }]} />
+        <View style={[styles.crosshairLineH, { backgroundColor: p.tint }]} />
+        <View style={[styles.crosshairLineV, { backgroundColor: p.tint }]} />
+      </View>
+
+      {/* HUD: floating search + layers */}
+      <View style={[styles.hudTop, { paddingTop: Math.max(10, insets.top + 8) }]}>
+        <View style={[styles.hudRow, { backgroundColor: TacticalPalette.charcoal, borderColor: TacticalPalette.border }]}>
+          <Pressable
+            onPress={() => setHudSearchOpen((v) => !v)}
+            style={styles.hudIconBtn}
+            accessibilityRole="button"
+            accessibilityLabel={hudSearchOpen ? "Minimize search" : "Open search"}>
+            <FontAwesome name={hudSearchOpen ? "chevron-up" : "search"} size={16} color={p.tabIconDefault} />
+          </Pressable>
+          {hudSearchOpen ? (
+            <>
+              <TextInput
+                value={hudQuery}
+                onChangeText={setHudQuery}
+                placeholder="Search place, grid, POI…"
+                placeholderTextColor="#888"
+                onSubmitEditing={() => void runHudSearch()}
+                style={[styles.hudInput, { color: p.text, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
+                returnKeyType="search"
+              />
+              <Pressable
+                onPress={() => void runHudSearch()}
+                style={[styles.hudGoBtn, { backgroundColor: p.tint, opacity: hudSearching ? 0.6 : 1 }]}
+                disabled={hudSearching}>
+                <Text style={[styles.hudGoTx, { color: onTintLabel }]}>{hudSearching ? "…" : "Go"}</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Text style={[styles.hudMiniLabel, { color: p.tabIconDefault }]}>Search</Text>
+          )}
+            <Pressable
+              onPress={() => setLayersOpen((v) => !v)}
+              style={styles.hudIconBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Layers">
+              <FontAwesome name="th-large" size={16} color={p.tabIconDefault} />
+            </Pressable>
+        </View>
+
+        {layersOpen ? (
+          <View style={[styles.layersPanel, { borderColor: TacticalPalette.border, backgroundColor: TacticalPalette.elevated }]}>
+            <Text style={[styles.layersTitle, { color: p.text }]}>Layers</Text>
+            <View style={styles.layersRow}>
+              {[
+                ["osm_dark", "OSM Dark"],
+                ["osm", "OSM"],
+                ["topo", "Topo"],
+                ["satellite", "Sat"],
+              ].map(([id, label]) => (
+                <Pressable
+                  key={id}
+                  onPress={() => setBaseLayer(id as MapBaseLayerId)}
+                  style={[
+                    styles.layerChip,
+                    {
+                      borderColor: baseLayer === id ? p.tint : TacticalPalette.border,
+                      backgroundColor: baseLayer === id ? TacticalPalette.panel : "transparent",
+                    },
+                  ]}>
+                  <Text style={[styles.layerChipTx, { color: p.text }]}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={[styles.layersHint, { color: p.tabIconDefault }]}>
+              Tip: keep Intel off unless you need OSINT overlays.
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      {/* Draggable coordinate widget */}
+      <CoordWidget
+        onTintLabel={onTintLabel}
+        tint={p.tint}
+        border={TacticalPalette.border}
+        text={p.text}
+        textMuted={p.tabIconDefault}
+        label={centerLabel}
+        fmt={centerFmt}
+        onToggleFmt={() => setCenterFmt((v) => (v === "latlng" ? "mgrs" : "latlng"))}
+      />
+
       {loading ? (
         <View style={styles.loader}>
           <ActivityIndicator color={p.tint} size="large" />
         </View>
       ) : null}
-    </>
+    </View>
   );
 
   const mapToolsInner = (
@@ -775,9 +987,11 @@ export default function MapScreen() {
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
-                onPress={() => setBaseLayer((b) => (b === "osm" ? "satellite" : "osm"))}>
+                onPress={() =>
+                  setBaseLayer((b) => (b === "satellite" ? "osm_dark" : "satellite"))
+                }>
                 <Text style={[styles.chipLabel, { color: p.text }]}>
-                  {baseLayer === "satellite" ? "Satellite" : "OSM map"}
+                  {baseLayer === "satellite" ? "Satellite" : "Basemap"}
                 </Text>
               </Pressable>
               <Pressable
@@ -900,66 +1114,7 @@ export default function MapScreen() {
               </View>
             ) : null}
 
-        <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Place search</Text>
-        <View style={styles.placeRow}>
-          <TextInput
-            placeholder="City, address, POI…"
-            placeholderTextColor="#888"
-            value={placeQuery}
-            onChangeText={setPlaceQuery}
-            onSubmitEditing={() => void runPlaceSearch()}
-            returnKeyType="search"
-            style={[
-              styles.placeInput,
-              {
-                color: p.text,
-                borderColor: scheme === "dark" ? "#3f3f46" : "#d4d4d8",
-                backgroundColor: scheme === "dark" ? "#09090b" : "#fafafa",
-              },
-            ]}
-          />
-          <Pressable
-            style={({ pressed }) => [
-              styles.placeSearchBtn,
-              { backgroundColor: p.tint, opacity: pressed ? 0.9 : 1 },
-            ]}
-            disabled={placeSearching}
-            onPress={() => void runPlaceSearch()}>
-            <Text style={[styles.placeSearchBtnLabel, { color: onTintLabel }]}>
-              {placeSearching ? "…" : "Search"}
-            </Text>
-          </Pressable>
-        </View>
-        {placeHits.length ? (
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            style={styles.placeResults}
-            nestedScrollEnabled>
-            {placeHits.map((h, i) => (
-              <Pressable
-                key={`${h.source}-${h.lat}-${h.lng}-${i}`}
-                style={({ pressed }) => [
-                  styles.placeHitRow,
-                  {
-                    borderColor: scheme === "dark" ? "#3f3f46" : "#e4e4e7",
-                    backgroundColor: pressed
-                      ? scheme === "dark"
-                        ? "#18181b"
-                        : "#f4f4f5"
-                      : "transparent",
-                  },
-                ]}
-                onPress={() => flyToCoords(h.lat, h.lng, 10)}>
-                <Text style={[styles.placeHitLabel, { color: p.text }]} numberOfLines={2}>
-                  {h.label}
-                </Text>
-                <Text style={[styles.placeHitMeta, { color: p.tabIconDefault }]}>
-                  {h.source}
-                </Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        ) : null}
+        {/* Place search moved into floating HUD */}
 
             <Pressable
               onPress={() => setIntelToolsOpen((v) => !v)}
@@ -1439,6 +1594,87 @@ const styles = StyleSheet.create({
   },
   mapAuxLinkTx: { fontSize: 14, fontWeight: "800" },
   mapAuxLinkSub: { fontSize: 11, marginTop: 4, lineHeight: 15 },
+  hudTop: {
+    position: "absolute",
+    left: 10,
+    right: 10,
+    top: 0,
+    gap: 10,
+    pointerEvents: "box-none",
+  },
+  hudRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  hudIconBtn: { paddingHorizontal: 12, paddingVertical: 12 },
+  hudInput: { flex: 1, paddingVertical: 10, paddingHorizontal: 10, fontSize: 14 },
+  hudGoBtn: { paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10, marginRight: 10 },
+  hudGoTx: { fontWeight: "900", fontSize: 13 },
+  hudMiniLabel: { flex: 1, fontSize: 12, fontWeight: "800", paddingVertical: 12 },
+  layersPanel: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    maxWidth: 520,
+    alignSelf: "flex-start",
+  },
+  layersTitle: { fontSize: 12, fontWeight: "900", marginBottom: 8, letterSpacing: 0.6, textTransform: "uppercase" },
+  layersRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  layerChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  layerChipTx: { fontSize: 13, fontWeight: "800" },
+  layersHint: { fontSize: 11, lineHeight: 15, marginTop: 10, opacity: 0.85 },
+
+  crosshairWrap: {
+    position: "absolute",
+    left: "50%",
+    top: "50%",
+    width: 44,
+    height: 44,
+    marginLeft: -22,
+    marginTop: -22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  crosshairDot: { width: 10, height: 10, borderRadius: 10, borderWidth: 2, backgroundColor: "rgba(0,0,0,0.25)" },
+  crosshairLineH: { position: "absolute", height: 2, width: 44, opacity: 0.85 },
+  crosshairLineV: { position: "absolute", width: 2, height: 44, opacity: 0.85 },
+
+  coordBox: {
+    position: "absolute",
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+    ...(Platform.OS === "web" ? { boxShadow: "0 10px 22px rgba(0,0,0,0.35)" } : { elevation: 12 }),
+  },
+  coordHead: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: TacticalPalette.border,
+  },
+  coordTitle: { fontSize: 11, fontWeight: "900", letterSpacing: 0.6, textTransform: "uppercase" },
+  coordPill: { borderWidth: 1, borderColor: TacticalPalette.border, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 10 },
+  coordPillTx: { fontSize: 11, fontWeight: "900" },
+  coordBody: { paddingHorizontal: 12, paddingVertical: 10, gap: 6 },
+  coordVal: { fontSize: 14, fontWeight: "800" },
+  coordHint: { fontSize: 10, fontWeight: "700", opacity: 0.7 },
+  resizeCorner: {
+    position: "absolute",
+    right: 0,
+    bottom: 0,
+    width: 22,
+    height: 22,
+    borderLeftWidth: 2,
+    borderTopWidth: 2,
+    borderColor: TacticalPalette.borderLight,
+    backgroundColor: "rgba(0,0,0,0.12)",
+  },
   intelToolsToggle: {
     borderWidth: 1,
     borderRadius: 10,

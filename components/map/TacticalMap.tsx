@@ -23,6 +23,8 @@ type Props = {
   baseLayer?: MapBaseLayerId;
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
+  /** Map center update (used for crosshair coordinate readout). */
+  onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
 };
 
 /**

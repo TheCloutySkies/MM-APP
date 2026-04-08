@@ -23,6 +23,10 @@ export type { MapFlyToRequest, MapPin };
 
 /** Standard OSM raster tiles ({@link https://wiki.openstreetmap.org/wiki/Raster_tile_providers}). */
 export const OSM_TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+/** Dark OSM basemap (CartoDB Dark Matter). */
+export const OSM_DARK_TILE_TEMPLATE = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+/** Topographic basemap (OpenTopoMap). */
+export const OPENTOPOMAP_TILE_TEMPLATE = "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png";
 
 /** Esri World Imagery (subject to Esri / ArcGIS terms of use). */
 export const ESRI_SATELLITE_TILE_TEMPLATE =
@@ -38,6 +42,7 @@ type Props = {
   baseLayer?: MapBaseLayerId;
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
+  onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
 };
 
 function zoomToDeltas(lat: number, zoom: number) {
@@ -59,6 +64,7 @@ export function TacticalMap({
   baseLayer = "osm",
   userLocation,
   pointerMode: _pointerMode = "default",
+  onCenterChange,
 }: Props) {
   const mapRef = useRef<MapView>(null);
   const baseMapType =
@@ -105,13 +111,27 @@ export function TacticalMap({
         onLongPress={(e) => {
           const { latitude, longitude } = e.nativeEvent.coordinate;
           onLongPress?.(latitude, longitude);
+        }}
+        onRegionChangeComplete={(r) => {
+          onCenterChange?.(r.latitude, r.longitude);
         }}>
         <UrlTile
           flipY={false}
           maximumZ={19}
           minimumZ={0}
           tileSize={256}
-          urlTemplate={baseLayer === "satellite" ? ESRI_SATELLITE_TILE_TEMPLATE : OSM_TILE_URL_TEMPLATE}
+          urlTemplate={
+            baseLayer === "satellite"
+              ? ESRI_SATELLITE_TILE_TEMPLATE
+              : baseLayer === "topo"
+                ? OPENTOPOMAP_TILE_TEMPLATE
+                : baseLayer === "osm_dark"
+                  ? OSM_DARK_TILE_TEMPLATE
+                  : OSM_TILE_URL_TEMPLATE
+          }
+          {...(baseLayer === "osm_dark" || baseLayer === "topo"
+            ? { tileCacheMaxAge: 60 * 60 * 24 }
+            : {})}
           zIndex={-1}
         />
         {polygons.map((poly) => (

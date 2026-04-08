@@ -24,6 +24,7 @@ type Props = {
   baseLayer?: MapBaseLayerId;
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
+  onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
 };
 
 /**

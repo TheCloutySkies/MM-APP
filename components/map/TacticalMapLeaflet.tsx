@@ -22,6 +22,7 @@ type Props = {
   baseLayer?: MapBaseLayerId;
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
+  onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
 };
 
 /** CDN assets so Metro never resolves leaflet/dist/images/*.png */
@@ -92,6 +93,20 @@ function makeOsmLayer() {
   });
 }
 
+function makeOsmDarkLayer() {
+  return L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    subdomains: "abcd",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> · © CARTO',
+  });
+}
+
+function makeTopoLayer() {
+  return L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+    subdomains: "abc",
+    attribution: '© OpenTopoMap (CC-BY-SA) · © OSM contributors',
+  });
+}
+
 function makeSatelliteLayer() {
   return L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -109,6 +124,7 @@ function TacticalMapLeaflet({
   baseLayer = "osm",
   userLocation,
   pointerMode = "default",
+  onCenterChange,
 }: Props) {
   useLeafletAssets();
 
@@ -128,6 +144,8 @@ function TacticalMapLeaflet({
   onPressRef.current = onPress;
   const userLocRef = useRef(userLocation);
   userLocRef.current = userLocation;
+  const onCenterRef = useRef(onCenterChange);
+  onCenterRef.current = onCenterChange;
 
   const paintAll = () => {
     const group = layerRef.current;
@@ -198,6 +216,14 @@ function TacticalMapLeaflet({
     };
     map.on("click", onMapClick);
 
+    const emitCenter = () => {
+      const c = map.getCenter();
+      onCenterRef.current?.(c.lat, c.lng, map.getZoom());
+    };
+    emitCenter();
+    map.on("moveend", emitCenter);
+    map.on("zoomend", emitCenter);
+
     const t = requestAnimationFrame(() => {
       map.invalidateSize();
     });
@@ -206,6 +232,8 @@ function TacticalMapLeaflet({
       cancelAnimationFrame(t);
       map.off("contextmenu", onCtx);
       map.off("click", onMapClick);
+      map.off("moveend", emitCenter);
+      map.off("zoomend", emitCenter);
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
@@ -231,7 +259,14 @@ function TacticalMapLeaflet({
     const cur = tileRef.current;
     if (!map || !cur) return;
     map.removeLayer(cur);
-    const next = baseLayer === "satellite" ? makeSatelliteLayer() : makeOsmLayer();
+    const next =
+      baseLayer === "satellite"
+        ? makeSatelliteLayer()
+        : baseLayer === "topo"
+          ? makeTopoLayer()
+          : baseLayer === "osm_dark"
+            ? makeOsmDarkLayer()
+            : makeOsmLayer();
     next.addTo(map);
     tileRef.current = next;
   }, [baseLayer]);
