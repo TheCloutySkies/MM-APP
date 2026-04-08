@@ -65,6 +65,13 @@ export default function AppLayout() {
           }}
         />
         <Tabs.Screen
+          name="signals"
+          options={{
+            title: "Signals",
+            tabBarIcon: ({ color }) => <TabIcon name="signal" color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="forensics"
           options={{
             title: "Forensics",

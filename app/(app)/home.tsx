@@ -67,6 +67,16 @@ export default function HomeScreen() {
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
+            title="Signals"
+            subtitle="Ciphers, OTP, compressor, stego"
+            href="/(app)/signals"
+            tabBarDragId="signals"
+            onPinToTabBar={() => pinModuleTab("signals")}
+            icon={<FontAwesome name="signal" size={24} color={TacticalPalette.accent} />}
+          />
+        </View>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
+          <TacticalCard
             title="Map & OSINT"
             subtitle="Tactical map, intel layers, E2EE pins"
             href="/(app)/map"

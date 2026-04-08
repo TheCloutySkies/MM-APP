@@ -4,6 +4,7 @@
 export const MAIN_TAB_ROUTE_ORDER = [
   "home",
   "vault",
+  "signals",
   "map",
   "reports",
   "missions",
@@ -15,6 +16,7 @@ export type MainTabRouteId = (typeof MAIN_TAB_ROUTE_ORDER)[number];
 export const MAIN_TAB_LABEL: Record<MainTabRouteId, string> = {
   home: "Home",
   vault: "Vault",
+  signals: "Signals",
   map: "Map",
   reports: "Reports",
   missions: "Missions",
