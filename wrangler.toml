@@ -2,10 +2,8 @@
 # `main` + ASSETS binding replaces any dashboard "Hello world" placeholder.
 # https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/
 #
-# Public client vars (EXPO_PUBLIC_*) must NOT live in git — set them in:
-#   Cloudflare Dashboard → Workers → mm-app → Settings → Variables
-# For local `wrangler dev`, copy `.dev.vars.example` → `.dev.vars` (gitignored).
-# They are injected into HTML as window.__MM_EXPO_PUBLIC__ (see worker/index.js).
+# Public Supabase client vars are injected into HTML as window.__MM_EXPO_PUBLIC__ (see worker/index.js).
+# Override in Dashboard → Workers → mm-app → Settings → Variables if you do not want them in this file.
 
 name = "mm-app"
 main = "worker/index.js"
@@ -19,6 +17,12 @@ head_sampling_rate = 1
 
 [observability.logs]
 invocation_logs = true
+
+[vars]
+EXPO_PUBLIC_SUPABASE_URL = "https://yzunwqzeqfeemyxpkvto.supabase.co"
+EXPO_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_jlLEV02J_-3L-C0VcKVzLA_Lzen8jEJ"
+# 32-byte hex (64 chars). Same value required on every device for shared map markers, bulletin, missions, vault team folders.
+EXPO_PUBLIC_MM_MAP_SHARED_KEY = "63c761f33b6ac7c1d2b1b571ae66fde4527ae6b640e0535bfeece151f38a2924"
 
 [assets]
 directory = "./dist"

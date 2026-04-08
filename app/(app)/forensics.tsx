@@ -73,11 +73,29 @@ export default function ForensicsScreen() {
     }
   }, [lastBytes, lastMime, report]);
 
+  const exportJson = useCallback(async () => {
+    if (!report) return;
+    const json = JSON.stringify(report, null, 2);
+    const name = `forensics-${report.fileName.replace(/[^\w.\-]+/g, "_").slice(0, 40)}.json`;
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
+    await Share.share({ title: name, message: json.length < 95000 ? json : `${json.slice(0, 90000)}\n… [truncated]` });
+  }, [report]);
+
   return (
     <ScrollView style={[styles.wrap, { backgroundColor: p.background }]} contentContainerStyle={styles.content}>
       <Text style={[styles.lead, { color: p.tabIconDefault }]}>
-        Client-side integrity and metadata review. Nothing is uploaded. Full desktop CloutVision (OCR, YOLO, OpenCV)
-        is not available in the browser.
+        Client-side integrity and structure review: hashing, entropy, magic-byte containers, PNG/GIF/BMP dimensions,
+        PDF version, ZIP heuristics, SQLite/GZIP/Mach-O/ELF detection, UTF-8 text preview, and JPEG EXIF/GPS presence
+        (coordinates never shown). Nothing is uploaded. Desktop-grade OCR/CV is still out of scope in the browser.
       </Text>
 
       <Pressable
@@ -100,27 +118,86 @@ export default function ForensicsScreen() {
       {report ? (
         <View style={[styles.card, { borderColor: TacticalPalette.border }]}>
           <Text style={[styles.cardTitle, { color: p.text }]}>{report.fileName}</Text>
-          <Text style={[styles.row, { color: p.tabIconDefault }]}>Size: {report.byteLength} bytes</Text>
-          <Text style={[styles.row, { color: p.tabIconDefault }]}>Sniff: {report.magic} · MIME {report.mimeGuess}</Text>
+          <Text style={[styles.row, { color: p.tabIconDefault }]}>
+            Size: {report.byteLength.toLocaleString()} bytes
+          </Text>
+          <Text style={[styles.row, { color: p.tabIconDefault }]}>
+            Sniff: {report.magic} · MIME {report.mimeGuess}
+          </Text>
+          {report.declaredExtension ? (
+            <Text style={[styles.row, { color: report.extensionMismatch ? TacticalPalette.accent : p.tabIconDefault }]}>
+              Extension .{report.declaredExtension}
+              {report.extensionMismatch ? " — does not match sniffed container (possible misdirection)" : " — matches"}
+            </Text>
+          ) : null}
+
+          <Text style={[styles.section, { color: TacticalPalette.coyote }]}>Hashes</Text>
           <Text style={[styles.mono, { color: TacticalPalette.bone }]} selectable>
             SHA-256: {report.sha256Hex}
           </Text>
+          <Text style={[styles.mono, { color: TacticalPalette.boneMuted, marginTop: 6 }]} selectable>
+            SHA-512: {report.sha512Hex}
+          </Text>
+
+          <Text style={[styles.section, { color: TacticalPalette.coyote }]}>Content signals</Text>
           <Text style={[styles.row, { color: p.tabIconDefault }]}>
-            Entropy: {report.shannonEntropyBits.toFixed(2)} bits/byte (max ~8 — high suggests compressed or encrypted
-            data)
+            Entropy: {report.shannonEntropyBits.toFixed(2)} bits/byte (high → compressed / encrypted / random)
           </Text>
           <Text style={[styles.row, { color: p.tabIconDefault }]}>
-            UTF-8 decode: {report.utf8Status} · printable ASCII: {(report.printableAsciiRatio * 100).toFixed(1)}%
+            UTF-8: {report.utf8Status} · printable ASCII: {(report.printableAsciiRatio * 100).toFixed(1)}% · control
+            (sample): {(report.controlCharRatio * 100).toFixed(1)}%
           </Text>
           <Text style={[styles.mono, { color: TacticalPalette.boneMuted, marginTop: 6 }]} selectable>
             Head (hex): {report.hexHead}
           </Text>
+
           {report.imageSize ? (
             <Text style={[styles.row, { color: p.tabIconDefault }]}>
-              Image decode: {report.imageSize.width}×{report.imageSize.height}
+              Raster decode: {report.imageSize.width}×{report.imageSize.height}
             </Text>
           ) : null}
-          <Text style={[styles.section, { color: TacticalPalette.coyote }]}>EXIF / segments</Text>
+          {report.structuralImageSize ? (
+            <Text style={[styles.row, { color: p.tabIconDefault }]}>
+              Structure size: {report.structuralImageSize.width}×{report.structuralImageSize.height} (
+              {report.structuralImageSize.source})
+            </Text>
+          ) : null}
+
+          {report.structureHints.length > 0 ? (
+            <>
+              <Text style={[styles.section, { color: TacticalPalette.coyote }]}>Structure</Text>
+              {report.structureHints.map((h, i) => (
+                <Text key={i} style={[styles.row, { color: p.tabIconDefault }]}>
+                  • {h}
+                </Text>
+              ))}
+            </>
+          ) : null}
+
+          {report.pdfVersion ? (
+            <Text style={[styles.row, { color: p.tabIconDefault }]}>PDF header version: {report.pdfVersion}</Text>
+          ) : null}
+
+          {report.pngChunkTypes && report.pngChunkTypes.length > 0 ? (
+            <Text style={[styles.row, { color: p.tabIconDefault }]}>
+              PNG chunk order: {report.pngChunkTypes.join(" → ")}
+            </Text>
+          ) : null}
+
+          {report.lineCountEstimate != null ? (
+            <Text style={[styles.row, { color: p.tabIconDefault }]}>Lines (UTF-8 text): ~{report.lineCountEstimate}</Text>
+          ) : null}
+
+          {report.textPreview ? (
+            <>
+              <Text style={[styles.section, { color: TacticalPalette.coyote }]}>Text preview</Text>
+              <Text style={[styles.previewBox, { color: p.text, borderColor: TacticalPalette.border }]} selectable>
+                {report.textPreview}
+              </Text>
+            </>
+          ) : null}
+
+          <Text style={[styles.section, { color: TacticalPalette.coyote }]}>EXIF / JPEG segments</Text>
           <Text style={[styles.row, { color: p.tabIconDefault }]}>
             EXIF present: {report.exifSummary.hasExif ? "yes" : "no"} · GPS tags:{" "}
             {report.exifSummary.hasGps ? "present (coordinates not shown)" : "none"}
@@ -131,17 +208,26 @@ export default function ForensicsScreen() {
             </Text>
           ) : null}
 
-          <Pressable
-            onPress={() => void scrubAndShare()}
-            style={({ pressed }) => [
-              styles.secondaryBtn,
-              { borderColor: TacticalPalette.coyote, marginTop: 16, opacity: pressed ? 0.88 : 1 },
-            ]}>
-            <FontAwesome name="eraser" size={16} color={TacticalPalette.coyote} style={{ marginRight: 8 }} />
-            <Text style={[styles.secondaryBtnText, { color: TacticalPalette.bone }]}>
-              Scrub metadata (JPEG) & download / share
-            </Text>
-          </Pressable>
+          <View style={styles.btnRow}>
+            <Pressable
+              onPress={() => void scrubAndShare()}
+              style={({ pressed }) => [
+                styles.secondaryBtn,
+                { borderColor: TacticalPalette.coyote, opacity: pressed ? 0.88 : 1 },
+              ]}>
+              <FontAwesome name="eraser" size={16} color={TacticalPalette.coyote} style={{ marginRight: 8 }} />
+              <Text style={[styles.secondaryBtnText, { color: TacticalPalette.bone }]}>Scrub JPEG & export</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => void exportJson()}
+              style={({ pressed }) => [
+                styles.secondaryBtn,
+                { borderColor: p.tint, opacity: pressed ? 0.88 : 1 },
+              ]}>
+              <FontAwesome name="download" size={16} color={p.tint} style={{ marginRight: 8 }} />
+              <Text style={[styles.secondaryBtnText, { color: p.tint }]}>Export JSON</Text>
+            </Pressable>
+          </View>
         </View>
       ) : null}
     </ScrollView>
@@ -173,8 +259,17 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontSize: 18, fontWeight: "800", marginBottom: 8 },
   row: { fontSize: 14, lineHeight: 20 },
-  mono: { fontSize: 12, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", marginTop: 8 },
+  mono: { fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", marginTop: 4, lineHeight: 16 },
   section: { fontSize: 12, fontWeight: "800", letterSpacing: 0.8, marginTop: 14, marginBottom: 4 },
+  previewBox: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 13,
+    lineHeight: 20,
+    maxHeight: 220,
+  },
+  btnRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 16 },
   secondaryBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -182,6 +277,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 10,
     paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexGrow: 1,
+    flexBasis: "45%",
   },
-  secondaryBtnText: { fontWeight: "700", fontSize: 14 },
+  secondaryBtnText: { fontWeight: "700", fontSize: 13 },
 });

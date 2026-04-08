@@ -93,13 +93,6 @@ export default function AppLayout() {
           }}
         />
         <Tabs.Screen
-          name="integrations"
-          options={{
-            title: "Integrations",
-            href: null,
-          }}
-        />
-        <Tabs.Screen
           name="operation-detail"
           options={{
             title: "Operation",

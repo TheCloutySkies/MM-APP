@@ -1,4 +1,4 @@
--- Team-visible GPX snapshots (plaintext XML) for importing into Gaia, Garmin, Meshtastic utilities, etc.
+-- Team-visible GPX snapshots (plaintext XML) for importing into Gaia, Garmin, QGIS, etc.
 -- Created client-side after decrypting map_markers with the unit key.
 
 create table if not exists public.map_team_gpx_exports (

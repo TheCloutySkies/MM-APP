@@ -145,14 +145,6 @@ export default function HomeScreen() {
             icon={<FontAwesome name="download" size={24} color={TacticalPalette.accent} />}
           />
         </View>
-        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
-          <TacticalCard
-            title="Integrations"
-            subtitle="Meshtastic HTTP probe & docs"
-            href="/(app)/integrations"
-            icon={<FontAwesome name="plug" size={24} color={TacticalPalette.coyote} />}
-          />
-        </View>
       </View>
     </ScrollView>
   );
