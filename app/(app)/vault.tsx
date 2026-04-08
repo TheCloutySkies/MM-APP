@@ -1,11 +1,12 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
 import {
     Alert,
     FlatList,
+    Modal,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -99,6 +100,7 @@ function sectionIcon(s: VaultSection): ComponentProps<typeof FontAwesome>["name"
 }
 
 export default function VaultScreen() {
+  const router = useRouter();
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
   const { width: windowW } = useWindowDimensions();
@@ -128,6 +130,7 @@ export default function VaultScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
+  const [teamHubOpen, setTeamHubOpen] = useState(false);
   const viewMode = useMMStore((s) => s.vaultDriveViewMode);
   const setVaultDriveViewMode = useMMStore((s) => s.setVaultDriveViewMode);
 
@@ -160,6 +163,27 @@ export default function VaultScreen() {
     setRows((data ?? []) as VaultObjectRow[]);
     await refreshFolders();
   }, [supabase, refreshFolders]);
+
+  const createMapPointsFolder = async () => {
+    if (!supabase || !profileId || !mapKey || mapKey.length !== 32) {
+      Alert.alert("Map points folder", "Team encryption key required. Unlock vault or use latest build with shared key.");
+      return;
+    }
+    const label = "Map points & team layers";
+    const enc = encryptUtf8(mapKey, label, VAULT_FOLDER_NAME_AAD);
+    const { error } = await supabase.from("vault_folders").insert({
+      parent_id: selectedFolderId,
+      encrypted_name: enc,
+      created_by: profileId,
+    });
+    if (error) {
+      Alert.alert("Folder", error.message);
+      return;
+    }
+    Alert.alert("Drive", `Created encrypted folder “${label}” in the current location.`);
+    setTeamHubOpen(false);
+    void refreshPrivate();
+  };
 
   const createFolder = async () => {
     if (!supabase || !profileId || !mapKey || mapKey.length !== 32) {
@@ -635,6 +659,34 @@ export default function VaultScreen() {
           {sidebarNav("mission_plan", "Mission plans")}
           {sidebarNav("sitrep", "SITREPs")}
           {sidebarNav("aar", "After action")}
+          <Pressable
+            onPress={() => setTeamHubOpen(true)}
+            style={({ pressed }) => [
+              styles.sideItem,
+              {
+                borderLeftWidth: 3,
+                borderLeftColor: "transparent",
+                backgroundColor: pressed ? TacticalPalette.charcoal : "transparent",
+                marginTop: 8,
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: borderM,
+                paddingTop: 14,
+              },
+            ]}>
+            <FontAwesome
+              name="users"
+              size={18}
+              color={TacticalPalette.coyote}
+              style={{ marginRight: isWideLayout ? 12 : 0 }}
+            />
+            {isWideLayout ? (
+              <Text
+                style={{ color: TacticalPalette.bone, fontWeight: "700", fontSize: 13 }}
+                numberOfLines={1}>
+                Team hub
+              </Text>
+            ) : null}
+          </Pressable>
           {section === "private" ? (
             <View style={{ paddingHorizontal: 10, paddingTop: 14, gap: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderM, marginTop: 8 }}>
               <Text style={{ color: TacticalPalette.boneMuted, fontSize: 10, fontWeight: "800", letterSpacing: 0.6 }}>
@@ -840,6 +892,54 @@ export default function VaultScreen() {
           )}
         </View>
       </View>
+
+      <Modal visible={teamHubOpen} animationType="fade" transparent onRequestClose={() => setTeamHubOpen(false)}>
+        <Pressable style={styles.teamHubBackdrop} onPress={() => setTeamHubOpen(false)}>
+          <View style={styles.teamHubSheet}>
+            <Text style={styles.teamHubTitle}>Team workspace</Text>
+            <Text style={styles.teamHubSub}>
+              Shared map, missions, and bulletin use the same team crypto key. Open a destination or create a drive
+              folder for map-related files.
+            </Text>
+            <Pressable
+              style={styles.teamHubBtn}
+              onPress={() => {
+                setTeamHubOpen(false);
+                router.push("/(app)/map");
+ }}>
+              <FontAwesome name="map" size={16} color={TacticalPalette.bone} style={{ marginRight: 10 }} />
+              <Text style={styles.teamHubBtnTx}>Live map</Text>
+            </Pressable>
+            <Pressable
+              style={styles.teamHubBtn}
+              onPress={() => {
+                setTeamHubOpen(false);
+                router.push("/(app)/missions");
+              }}>
+              <FontAwesome name="crosshairs" size={16} color={TacticalPalette.bone} style={{ marginRight: 10 }} />
+              <Text style={styles.teamHubBtnTx}>Mission plans & operations</Text>
+            </Pressable>
+            <Pressable
+              style={styles.teamHubBtn}
+              onPress={() => {
+                setTeamHubOpen(false);
+                router.push("/(app)/bulletin");
+              }}>
+              <FontAwesome name="bullhorn" size={16} color={TacticalPalette.bone} style={{ marginRight: 10 }} />
+              <Text style={styles.teamHubBtnTx}>Bulletin</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.teamHubBtn, styles.teamHubBtnLast]}
+              onPress={() => void createMapPointsFolder()}>
+              <FontAwesome name="folder" size={16} color={TacticalPalette.bone} style={{ marginRight: 10 }} />
+              <Text style={styles.teamHubBtnTx}>Create “Map points” folder here</Text>
+            </Pressable>
+            <Pressable onPress={() => setTeamHubOpen(false)} style={{ marginTop: 12, alignItems: "center" }}>
+              <Text style={{ color: TacticalPalette.boneMuted, fontWeight: "700" }}>Close</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -941,4 +1041,38 @@ const styles = StyleSheet.create({
   gridSub: { fontSize: 13, fontWeight: "800", marginTop: 4, letterSpacing: 0.5 },
   gridMeta: { fontSize: 11, marginTop: 12, fontWeight: "500" },
   empty: { fontSize: 13, lineHeight: 20, marginTop: 24, paddingHorizontal: 4 },
+  teamHubBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  teamHubSheet: {
+    borderRadius: 16,
+    padding: 20,
+    backgroundColor: TacticalPalette.charcoal,
+    borderWidth: 1,
+    borderColor: TacticalPalette.border,
+    maxWidth: 440,
+    alignSelf: "center",
+    width: "100%",
+  },
+  teamHubTitle: {
+    color: TacticalPalette.bone,
+    fontSize: 18,
+    fontWeight: "900",
+    marginBottom: 8,
+  },
+  teamHubSub: { color: TacticalPalette.boneMuted, fontSize: 13, lineHeight: 19, marginBottom: 16 },
+  teamHubBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: TacticalPalette.accentDim,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+  },
+  teamHubBtnLast: { backgroundColor: TacticalPalette.oliveDrab },
+  teamHubBtnTx: { color: TacticalPalette.bone, fontWeight: "800", fontSize: 15, flex: 1 },
 });

@@ -105,6 +105,16 @@ export default function ForensicsScreen() {
           <Text style={[styles.mono, { color: TacticalPalette.bone }]} selectable>
             SHA-256: {report.sha256Hex}
           </Text>
+          <Text style={[styles.row, { color: p.tabIconDefault }]}>
+            Entropy: {report.shannonEntropyBits.toFixed(2)} bits/byte (max ~8 — high suggests compressed or encrypted
+            data)
+          </Text>
+          <Text style={[styles.row, { color: p.tabIconDefault }]}>
+            UTF-8 decode: {report.utf8Status} · printable ASCII: {(report.printableAsciiRatio * 100).toFixed(1)}%
+          </Text>
+          <Text style={[styles.mono, { color: TacticalPalette.boneMuted, marginTop: 6 }]} selectable>
+            Head (hex): {report.hexHead}
+          </Text>
           {report.imageSize ? (
             <Text style={[styles.row, { color: p.tabIconDefault }]}>
               Image decode: {report.imageSize.width}×{report.imageSize.height}

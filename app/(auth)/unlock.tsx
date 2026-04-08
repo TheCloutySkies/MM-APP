@@ -63,11 +63,18 @@ export default function UnlockScreen() {
         secureTextEntry
         value={master}
         onChangeText={setMaster}
+        selectionColor={TacticalPalette.coyote}
+        cursorColor={TacticalPalette.bone}
+        underlineColorAndroid="transparent"
+        autoCapitalize="none"
+        autoCorrect={false}
+        textContentType="password"
+        importantForAutofill="yes"
         style={[
           styles.input,
           {
             borderColor: TacticalPalette.border,
-            color: TacticalPalette.bone,
+            color: "#fffefb",
             backgroundColor: TacticalPalette.charcoal,
           },
         ]}
@@ -79,11 +86,16 @@ export default function UnlockScreen() {
         secureTextEntry
         value={pin}
         onChangeText={setPin}
+        selectionColor={TacticalPalette.coyote}
+        cursorColor={TacticalPalette.bone}
+        underlineColorAndroid="transparent"
+        textContentType="password"
+        importantForAutofill="yes"
         style={[
           styles.input,
           {
             borderColor: TacticalPalette.border,
-            color: TacticalPalette.bone,
+            color: "#fffefb",
             backgroundColor: TacticalPalette.charcoal,
           },
         ]}
@@ -130,7 +142,7 @@ const styles = StyleSheet.create({
     marginTop: -24,
   },
   note: { marginBottom: 8, fontSize: 14, textAlign: "center", lineHeight: 20 },
-  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 18 },
+  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, fontSize: 18, minHeight: 52 },
   btn: { paddingVertical: 16, borderRadius: 12, alignItems: "center" },
   btnTx: { color: TacticalPalette.bone, fontWeight: "700", fontSize: 16 },
 });

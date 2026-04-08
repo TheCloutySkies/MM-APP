@@ -1,5 +1,6 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import * as Location from "expo-location";
+import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
     ActivityIndicator,
@@ -48,6 +49,7 @@ import {
     buildOverpassFormBody,
     fetchOverpass,
 } from "@/lib/overpass";
+import { TEAM_POSITION_AAD, tintForUsername, type TeamPositionPayloadV1 } from "@/lib/teamPosition";
 import { fetchOpenMeteoCurrent } from "@/lib/weather";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
@@ -57,6 +59,7 @@ const SHEET_X_CLAMP = 110;
 const DESKTOP_MAP_TOOLS_DOCK_MIN_W = 920;
 
 export default function MapScreen() {
+  const router = useRouter();
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
   const { height: windowH, width: windowW } = useWindowDimensions();
@@ -90,7 +93,10 @@ export default function MapScreen() {
     geom: "point" | "route" | "zone";
     coordinates: { lat: number; lng: number }[];
   } | null>(null);
-  const [showIntel, setShowIntel] = useState(true);
+  const [showIntel, setShowIntel] = useState(false);
+  const [teamLivePins, setTeamLivePins] = useState<MapPin[]>([]);
+  const [shareTeamLocation, setShareTeamLocation] = useState(false);
+  const [intelToolsOpen, setIntelToolsOpen] = useState(false);
   const [customQl, setCustomQl] = useState(`node["amenity"="fuel"](__BBOX__);`);
   const [loading, setLoading] = useState(false);
   const [osintPower, setOsintPower] = useState(false);
@@ -212,6 +218,92 @@ export default function MapScreen() {
       void supabase.removeChannel(channel);
     };
   }, [supabase, loadMarkers]);
+
+  const loadTeamPositions = useCallback(async () => {
+    if (!supabase || !mapKey || mapKey.length !== 32) {
+      setTeamLivePins([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("team_positions")
+      .select("profile_id, username, encrypted_payload")
+      .order("updated_at", { ascending: false });
+    if (error) {
+      console.warn(error.message);
+      return;
+    }
+    const next: MapPin[] = [];
+    for (const row of data ?? []) {
+      if (row.profile_id === profileId) continue;
+      try {
+        const json = decryptUtf8(mapKey, row.encrypted_payload as string, TEAM_POSITION_AAD);
+        const pos = JSON.parse(json) as TeamPositionPayloadV1;
+        if (typeof pos.lat !== "number" || typeof pos.lng !== "number") continue;
+        const uname = String(row.username ?? "op");
+        next.push({
+          id: `team-pos-${row.profile_id}`,
+          lat: pos.lat,
+          lng: pos.lng,
+          title: `Live · ${uname}`,
+          tint: tintForUsername(uname),
+        });
+      } catch {
+        /* wrong key */
+      }
+    }
+    setTeamLivePins(next);
+  }, [supabase, mapKey, profileId]);
+
+  useEffect(() => {
+    void loadTeamPositions();
+  }, [loadTeamPositions]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase
+      .channel("mm-team-positions")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "team_positions" },
+        () => void loadTeamPositions(),
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [supabase, loadTeamPositions]);
+
+  const clearMyTeamPosition = useCallback(async () => {
+    if (!supabase || !profileId) return;
+    await supabase.from("team_positions").delete().eq("profile_id", profileId);
+  }, [supabase, profileId]);
+
+  useEffect(() => {
+    if (!shareTeamLocation || !supabase || !profileId || !mapKey || mapKey.length !== 32) return;
+    const push = async () => {
+      if (!userLoc) return;
+      const payload: TeamPositionPayloadV1 = {
+        v: 1,
+        lat: userLoc.lat,
+        lng: userLoc.lng,
+        at: Date.now(),
+      };
+      const enc = encryptUtf8(mapKey, JSON.stringify(payload), TEAM_POSITION_AAD);
+      const { error } = await supabase.from("team_positions").upsert(
+        {
+          profile_id: profileId,
+          username: username?.trim() || "operator",
+          encrypted_payload: enc,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "profile_id" },
+      );
+      if (error) console.warn(error.message);
+    };
+    void push();
+    const id = setInterval(() => void push(), 20000);
+    return () => clearInterval(id);
+  }, [shareTeamLocation, supabase, profileId, mapKey, username, userLoc]);
 
   const saveTacticalFeature = async (cat: TacCategoryId, pick: NonNullable<typeof categoryPick>) => {
     if (!supabase || !profileId || !mapKey) return;
@@ -438,9 +530,10 @@ export default function MapScreen() {
     }
   };
 
-  const mergedPins = showIntel
-    ? [...tacticalPins, ...intelPins, ...supermapPins]
-    : tacticalPins;
+  const mergedPins = useMemo(() => {
+    const teamAndTac = [...tacticalPins, ...teamLivePins];
+    return showIntel ? [...teamAndTac, ...intelPins, ...supermapPins] : teamAndTac;
+  }, [tacticalPins, teamLivePins, showIntel, intelPins, supermapPins]);
 
   const draftLinePreview = useMemo((): MapPolylineOverlay | null => {
     if (drawTool === "route" && pathDraft.length >= 2) {
@@ -610,6 +703,24 @@ export default function MapScreen() {
 
   const mapToolsInner = (
     <>
+            <Text style={[styles.mapToolsIntro, { color: p.tabIconDefault }]}>
+              Team pins & zones sync for everyone with the same unit key. Use Share live so others see your position
+              (updates ~20s). Turn on Intel overlay to add Overpass / OSINT on top.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push("/(app)/map-exports")}
+              style={({ pressed }) => [
+                styles.mapAuxLink,
+                { borderColor: p.tint, opacity: pressed ? 0.88 : 1 },
+              ]}>
+              <Text style={[styles.mapAuxLinkTx, { color: p.tint }]}>
+                Team GPX library — open in Gaia, Garmin, QGIS…
+              </Text>
+              <Text style={[styles.mapAuxLinkSub, { color: p.tabIconDefault }]}>
+                Publish plaintext snapshots everyone can download
+              </Text>
+            </Pressable>
             <ChipStrip>
               <Pressable
                 style={({ pressed }) => [
@@ -639,34 +750,21 @@ export default function MapScreen() {
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderWidth: shareTeamLocation ? 2 : 1,
+                    borderColor: shareTeamLocation ? TacticalPalette.accent : p.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
-                onPress={() => void runIntel("water")}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Water</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: p.tabIconDefault,
-                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                  },
-                ]}
-                onPress={() => void runIntel("power")}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Power</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: p.tabIconDefault,
-                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                  },
-                ]}
-                onPress={() => void runIntel("emergency")}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Emergency</Text>
+                onPress={() => {
+                  setShareTeamLocation((v) => {
+                    const next = !v;
+                    if (!next) void clearMyTeamPosition();
+                    return next;
+                  });
+                }}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>
+                  Share live {shareTeamLocation ? "on" : "off"}
+                </Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
@@ -703,120 +801,6 @@ export default function MapScreen() {
                 <Text style={[styles.chipLabel, { color: p.text }]}>
                   Pin drop {pointDropMode ? "ON" : "off"}
                 </Text>
-              </Pressable>
-            </ChipStrip>
-
-            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass · infrastructure presets</Text>
-            <ChipStrip>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: p.tabIconDefault,
-                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                  },
-                ]}
-                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.power_substations)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Substations</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: p.tabIconDefault,
-                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                  },
-                ]}
-                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.medical)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Medical</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: p.tabIconDefault,
-                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                  },
-                ]}
-                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.fuel)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Fuel</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: p.tabIconDefault,
-                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                  },
-                ]}
-                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.natural_water)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Waterfalls</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: p.tabIconDefault,
-                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                  },
-                ]}
-                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.comm_towers)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Comm towers</Text>
-              </Pressable>
-            </ChipStrip>
-
-            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>OSINT layers (SuperMap)</Text>
-            <Text style={[styles.drawHint, { color: p.tabIconDefault }]}>
-              Toggle sources, then load. Uses map centroid (first tactical pin or default Nevada). Power draws lines +
-              substations; USGS and FIRMS are points.
-            </Text>
-            <ChipStrip>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderWidth: osintPower ? 2 : 1,
-                    borderColor: osintPower ? TacticalPalette.accent : p.tabIconDefault,
-                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
-                  },
-                ]}
-                onPress={() => setOsintPower((v) => !v)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Grid · power</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderWidth: osintUsgs ? 2 : 1,
-                    borderColor: osintUsgs ? TacticalPalette.danger : p.tabIconDefault,
-                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
-                  },
-                ]}
-                onPress={() => setOsintUsgs((v) => !v)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>USGS EQ</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderWidth: osintFirms ? 2 : 1,
-                    borderColor: osintFirms ? TacticalPalette.coyote : p.tabIconDefault,
-                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
-                  },
-                ]}
-                onPress={() => setOsintFirms((v) => !v)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>NASA FIRMS</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: TacticalPalette.accent,
-                    backgroundColor: pressed ? TacticalPalette.panel : TacticalPalette.elevated,
-                  },
-                ]}
-                onPress={() => void refreshSupermapLayers()}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Load OSINT</Text>
               </Pressable>
             </ChipStrip>
 
@@ -977,6 +961,173 @@ export default function MapScreen() {
           </ScrollView>
         ) : null}
 
+            <Pressable
+              onPress={() => setIntelToolsOpen((v) => !v)}
+              style={({ pressed }) => [
+                styles.intelToolsToggle,
+                {
+                  borderColor: p.tint,
+                  opacity: pressed ? 0.88 : 1,
+                },
+              ]}>
+              <Text style={[styles.intelToolsToggleText, { color: p.tint }]}>
+                {intelToolsOpen ? "▼ Hide Overpass & OSINT" : "▶ Show Overpass & OSINT"}
+              </Text>
+            </Pressable>
+
+            {intelToolsOpen ? (
+              <>
+                <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass quick (OSM)</Text>
+                <ChipStrip>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.chip,
+                      {
+                        borderColor: p.tabIconDefault,
+                        backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                      },
+                    ]}
+                    onPress={() => void runIntel("water")}>
+                    <Text style={[styles.chipLabel, { color: p.text }]}>Water</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.chip,
+                      {
+                        borderColor: p.tabIconDefault,
+                        backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                      },
+                    ]}
+                    onPress={() => void runIntel("power")}>
+                    <Text style={[styles.chipLabel, { color: p.text }]}>Power</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.chip,
+                      {
+                        borderColor: p.tabIconDefault,
+                        backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                      },
+                    ]}
+                    onPress={() => void runIntel("emergency")}>
+                    <Text style={[styles.chipLabel, { color: p.text }]}>Emergency</Text>
+                  </Pressable>
+                </ChipStrip>
+
+            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass · infrastructure presets</Text>
+            <ChipStrip>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.power_substations)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Substations</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.medical)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Medical</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.fuel)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Fuel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.natural_water)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Waterfalls</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: p.tabIconDefault,
+                    backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                  },
+                ]}
+                onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.comm_towers)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Comm towers</Text>
+              </Pressable>
+            </ChipStrip>
+
+            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>OSINT layers (SuperMap)</Text>
+            <Text style={[styles.drawHint, { color: p.tabIconDefault }]}>
+              Toggle sources, then load. Uses map centroid (first tactical pin or default Nevada). Power draws lines +
+              substations; USGS and FIRMS are points.
+            </Text>
+            <ChipStrip>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: osintPower ? 2 : 1,
+                    borderColor: osintPower ? TacticalPalette.accent : p.tabIconDefault,
+                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                  },
+                ]}
+                onPress={() => setOsintPower((v) => !v)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Grid · power</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: osintUsgs ? 2 : 1,
+                    borderColor: osintUsgs ? TacticalPalette.danger : p.tabIconDefault,
+                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                  },
+                ]}
+                onPress={() => setOsintUsgs((v) => !v)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>USGS EQ</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderWidth: osintFirms ? 2 : 1,
+                    borderColor: osintFirms ? TacticalPalette.coyote : p.tabIconDefault,
+                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                  },
+                ]}
+                onPress={() => setOsintFirms((v) => !v)}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>NASA FIRMS</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.chip,
+                  {
+                    borderColor: TacticalPalette.accent,
+                    backgroundColor: pressed ? TacticalPalette.panel : TacticalPalette.elevated,
+                  },
+                ]}
+                onPress={() => void refreshSupermapLayers()}>
+                <Text style={[styles.chipLabel, { color: p.text }]}>Load OSINT</Text>
+              </Pressable>
+            </ChipStrip>
+
         <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass query</Text>
         <TextInput
           placeholder="Overpass QL — use __BBOX__ for bbox"
@@ -1000,6 +1151,8 @@ export default function MapScreen() {
           onPress={() => void runCustomIntel()}>
           <Text style={[styles.runBtnLabel, { color: onTintLabel }]}>Run query</Text>
         </Pressable>
+              </>
+            ) : null}
     </>
   );
 
@@ -1271,6 +1424,33 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 4,
     letterSpacing: 0.3,
+  },
+  mapToolsIntro: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  mapAuxLink: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  mapAuxLinkTx: { fontSize: 14, fontWeight: "800" },
+  mapAuxLinkSub: { fontSize: 11, marginTop: 4, lineHeight: 15 },
+  intelToolsToggle: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginTop: 4,
+    marginBottom: 8,
+    alignItems: "center",
+  },
+  intelToolsToggleText: {
+    fontSize: 14,
+    fontWeight: "800",
   },
   drawHint: {
     fontSize: 12,

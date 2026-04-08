@@ -86,6 +86,20 @@ export default function AppLayout() {
           }}
         />
         <Tabs.Screen
+          name="map-exports"
+          options={{
+            title: "GPX exports",
+            href: null,
+          }}
+        />
+        <Tabs.Screen
+          name="integrations"
+          options={{
+            title: "Integrations",
+            href: null,
+          }}
+        />
+        <Tabs.Screen
           name="operation-detail"
           options={{
             title: "Operation",

@@ -21,6 +21,8 @@ invocation_logs = true
 [vars]
 EXPO_PUBLIC_SUPABASE_URL = "https://yzunwqzeqfeemyxpkvto.supabase.co"
 EXPO_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_jlLEV02J_-3L-C0VcKVzLA_Lzen8jEJ"
+# 32-byte hex (64 chars). Same value required on every device for shared map markers, bulletin, missions, vault team folders.
+EXPO_PUBLIC_MM_MAP_SHARED_KEY = "63c761f33b6ac7c1d2b1b571ae66fde4527ae6b640e0535bfeece151f38a2924"
 
 [assets]
 directory = "./dist"

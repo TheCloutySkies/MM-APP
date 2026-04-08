@@ -20,6 +20,14 @@ export const OPS_AAD = {
 
 export const OPERATION_HUB_AAD = "mm-operation-hub-v1" as const;
 export const BULLETIN_AAD = "mm-ops-bulletin-v1" as const;
+/** Reply thread on mission_plan / other ops_reports rows (same decrypt key as map/ops). */
+export const OPS_COMMENT_AAD = "mm-ops-comment-v1" as const;
+
+export type OpsCommentPayloadV1 = {
+  v: 1;
+  body: string;
+  createdAt: number;
+};
 export const GEAR_LOADOUT_AAD = "mm-gear-loadout-v1" as const;
 export const VAULT_FOLDER_NAME_AAD = "mm-vault-folder-name-v1" as const;
 
@@ -134,6 +142,18 @@ export type BulletinPostPayloadV1 = {
 
 export type GearLineItem = { id: string; label: string; packed?: boolean };
 
+export const GEAR_LOADOUT_TYPES = [
+  { id: "vehicles", label: "Vehicles" },
+  { id: "weapons", label: "Weapons" },
+  { id: "bugout", label: "Bug-out" },
+  { id: "stashes", label: "Stashes" },
+  { id: "kit", label: "Kit" },
+  { id: "sustainment", label: "Sustainment" },
+] as const;
+
+export type GearLoadoutTypeId = (typeof GEAR_LOADOUT_TYPES)[number]["id"];
+
+/** Legacy on-disk shape; new saves use v2 fields via normalizeGearLoadoutPayload. */
 export type GearLoadoutPayloadV1 = {
   v: 1;
   name: string;
@@ -142,6 +162,69 @@ export type GearLoadoutPayloadV1 = {
   line3: GearLineItem[];
   createdAt: number;
 };
+
+export type GearLoadoutPayloadV2 = {
+  v: 2;
+  loadoutType: GearLoadoutTypeId;
+  name: string;
+  /** Person who owns / prepared this list (shown to the whole team). */
+  preparedByName: string;
+  line1: GearLineItem[];
+  line2: GearLineItem[];
+  line3: GearLineItem[];
+  createdAt: number;
+};
+
+export function gearLoadoutTypeLabel(id: string): string {
+  const row = GEAR_LOADOUT_TYPES.find((t) => t.id === id);
+  return row?.label ?? id;
+}
+
+function coerceLines(x: unknown): GearLineItem[] {
+  if (!Array.isArray(x)) return [];
+  return x.filter((i) => i && typeof i === "object") as GearLineItem[];
+}
+
+/** Normalize v1 or v2 encrypted JSON to a v2-shaped object for UI. */
+export function normalizeGearLoadoutPayload(raw: unknown, fallbackAuthor: string): GearLoadoutPayloadV2 | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const line1 = coerceLines(o.line1);
+  const line2 = coerceLines(o.line2);
+  const line3 = coerceLines(o.line3);
+  const name = typeof o.name === "string" ? o.name : "Loadout";
+  const createdAt = typeof o.createdAt === "number" ? o.createdAt : Date.now();
+
+  if (o.v === 2) {
+    const lt = typeof o.loadoutType === "string" ? o.loadoutType : "kit";
+    const loadoutType = (GEAR_LOADOUT_TYPES.some((t) => t.id === lt) ? lt : "kit") as GearLoadoutTypeId;
+    return {
+      v: 2,
+      loadoutType,
+      name,
+      preparedByName: typeof o.preparedByName === "string" && o.preparedByName.trim() ? o.preparedByName.trim() : fallbackAuthor,
+      line1,
+      line2,
+      line3,
+      createdAt,
+    };
+  }
+
+  if (o.v === 1) {
+    return {
+      v: 2,
+      loadoutType: "kit",
+      name,
+      preparedByName: fallbackAuthor,
+      line1,
+      line2,
+      line3,
+      createdAt,
+    };
+  }
+
+  return null;
+}
 
 export type AnyOpsPayload =
   | MissionPlanPayloadV1
@@ -155,6 +238,24 @@ export function parseMembersInput(raw: string): string[] {
     .split(/[\n,]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** Human label for list rows (avoid raw snake_case in UI). */
+export function formatDocKindLabel(kind: OpsDocKind): string {
+  switch (kind) {
+    case "mission_plan":
+      return "Mission plan";
+    case "sitrep":
+      return "SITREP";
+    case "aar":
+      return "After action report";
+    case "target_package":
+      return "Target package";
+    case "intel_report":
+      return "Intel report";
+    default:
+      return kind;
+  }
 }
 
 export function previewOpsRow(kind: OpsDocKind, decryptedJson: string): string {

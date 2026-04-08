@@ -14,6 +14,7 @@ import {
     View,
     useWindowDimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
     CALLSIGN_GUIDANCE,
@@ -25,6 +26,7 @@ import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useMMStore } from "@/store/mmStore";
 
 export default function CallsignScreen() {
+  const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const mmSize = Math.min(152, Math.max(72, width * 0.28));
   const router = useRouter();
@@ -116,10 +118,10 @@ export default function CallsignScreen() {
   return (
     <KeyboardAvoidingView
       style={[styles.shell, { backgroundColor: TacticalPalette.matteBlack }]}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}>
+      behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : 0}>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 120 }]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag">
         <View style={styles.box}>
@@ -166,6 +168,9 @@ export default function CallsignScreen() {
             placeholderTextColor={TacticalPalette.boneMuted}
             autoCapitalize="none"
             autoCorrect={false}
+            selectionColor={TacticalPalette.coyote}
+            cursorColor={TacticalPalette.bone}
+            underlineColorAndroid="transparent"
             value={draft}
             onChangeText={(t) => {
               setDraft(t);

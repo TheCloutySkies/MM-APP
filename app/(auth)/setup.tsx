@@ -3,20 +3,21 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
     Alert,
+    KeyboardAvoidingView,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
     Text,
     TextInput,
-    useColorScheme
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import Colors from "@/constants/Colors";
+import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useMMStore } from "@/store/mmStore";
 
 export default function SetupScreen() {
-  const scheme = useColorScheme() ?? "light";
-  const p = Colors[scheme];
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const completeSetup = useMMStore((s) => s.completeSetup);
 
@@ -24,6 +25,15 @@ export default function SetupScreen() {
   const [pinP, setPinP] = useState("");
   const [pinD, setPinD] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const inputStyle = [
+    styles.input,
+    {
+      borderColor: TacticalPalette.border,
+      color: "#fffefb",
+      backgroundColor: TacticalPalette.charcoal,
+    },
+  ];
 
   const run = async () => {
     if (master.length < 8) {
@@ -63,57 +73,80 @@ export default function SetupScreen() {
   };
 
   return (
-    <ScrollView
-      contentContainerStyle={[styles.wrap, { backgroundColor: p.background }]}
-      keyboardShouldPersistTaps="handled">
-      <Text style={[styles.para, { color: p.text }]}>
-        Create a master password and two PINs. Only the primary PIN opens the real vault; the duress
-        PIN opens an identical-looking decoy. There is no indication which PIN was accepted.
-      </Text>
-      <TextInput
-        placeholder="Master password"
-        placeholderTextColor="#888"
-        secureTextEntry
-        value={master}
-        onChangeText={setMaster}
-        style={[styles.input, { borderColor: p.tabIconDefault, color: p.text }]}
-      />
-      <TextInput
-        placeholder="Primary PIN"
-        placeholderTextColor="#888"
-        keyboardType="number-pad"
-        secureTextEntry
-        value={pinP}
-        onChangeText={setPinP}
-        style={[styles.input, { borderColor: p.tabIconDefault, color: p.text }]}
-      />
-      <TextInput
-        placeholder="Duress PIN"
-        placeholderTextColor="#888"
-        keyboardType="number-pad"
-        secureTextEntry
-        value={pinD}
-        onChangeText={setPinD}
-        style={[styles.input, { borderColor: p.tabIconDefault, color: p.text }]}
-      />
-      <Pressable
-        accessibilityRole="button"
-        disabled={busy}
-        onPress={() => void run()}
-        style={({ pressed }) => [
-          styles.btn,
-          { backgroundColor: pressed ? p.tabIconSelected : p.tint, opacity: busy ? 0.6 : 1 },
-        ]}>
-        <Text style={styles.btnTx}>Save and continue</Text>
-      </Pressable>
-    </ScrollView>
+    <KeyboardAvoidingView
+      style={[styles.shell, { backgroundColor: TacticalPalette.matteBlack }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : 0}>
+      <ScrollView
+        contentContainerStyle={[styles.wrap, { paddingBottom: insets.bottom + 40 }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag">
+        <Text style={[styles.para, { color: TacticalPalette.boneMuted }]}>
+          Create a master password and two PINs. Only the primary PIN opens the real vault; the duress PIN opens an
+          identical-looking decoy. There is no indication which PIN was accepted.
+        </Text>
+        <TextInput
+          placeholder="Master password"
+          placeholderTextColor={TacticalPalette.boneMuted}
+          secureTextEntry
+          value={master}
+          onChangeText={setMaster}
+          selectionColor={TacticalPalette.coyote}
+          cursorColor={TacticalPalette.bone}
+          underlineColorAndroid="transparent"
+          textContentType="newPassword"
+          autoCapitalize="none"
+          style={inputStyle}
+        />
+        <TextInput
+          placeholder="Primary PIN"
+          placeholderTextColor={TacticalPalette.boneMuted}
+          keyboardType="number-pad"
+          secureTextEntry
+          value={pinP}
+          onChangeText={setPinP}
+          selectionColor={TacticalPalette.coyote}
+          cursorColor={TacticalPalette.bone}
+          underlineColorAndroid="transparent"
+          textContentType="oneTimeCode"
+          style={inputStyle}
+        />
+        <TextInput
+          placeholder="Duress PIN"
+          placeholderTextColor={TacticalPalette.boneMuted}
+          keyboardType="number-pad"
+          secureTextEntry
+          value={pinD}
+          onChangeText={setPinD}
+          selectionColor={TacticalPalette.coyote}
+          cursorColor={TacticalPalette.bone}
+          underlineColorAndroid="transparent"
+          textContentType="oneTimeCode"
+          style={inputStyle}
+        />
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={() => void run()}
+          style={({ pressed }) => [
+            styles.btn,
+            {
+              backgroundColor: pressed ? TacticalPalette.accentDim : TacticalPalette.accent,
+              opacity: busy ? 0.6 : 1,
+            },
+          ]}>
+          <Text style={styles.btnTx}>Save and continue</Text>
+        </Pressable>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { padding: 24, gap: 14, flexGrow: 1 },
+  shell: { flex: 1 },
+  wrap: { padding: 24, gap: 14, flexGrow: 1, maxWidth: 520, alignSelf: "center", width: "100%" },
   para: { fontSize: 14, lineHeight: 20 },
-  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 16 },
+  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, fontSize: 16, minHeight: 52 },
   btn: { paddingVertical: 16, borderRadius: 12, alignItems: "center", marginTop: 8 },
-  btnTx: { color: "#fff", fontWeight: "700" },
+  btnTx: { color: TacticalPalette.bone, fontWeight: "700", fontSize: 16 },
 });

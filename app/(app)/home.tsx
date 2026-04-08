@@ -132,9 +132,25 @@ export default function HomeScreen() {
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Gear / logistics"
-            subtitle="Line 1–3 loadouts (E2EE)"
+            subtitle="Typed loadouts — vehicles, kit, sustainment…"
             href="/(app)/gear"
             icon={<FontAwesome name="suitcase" size={24} color={TacticalPalette.accent} />}
+          />
+        </View>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
+          <TacticalCard
+            title="Team GPX"
+            subtitle="Export map pins & routes for other apps"
+            href="/(app)/map-exports"
+            icon={<FontAwesome name="download" size={24} color={TacticalPalette.accent} />}
+          />
+        </View>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
+          <TacticalCard
+            title="Integrations"
+            subtitle="Meshtastic HTTP probe & docs"
+            href="/(app)/integrations"
+            icon={<FontAwesome name="plug" size={24} color={TacticalPalette.coyote} />}
           />
         </View>
       </View>

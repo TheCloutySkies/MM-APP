@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { MissionPlanModal } from "@/components/ops/MissionPlanModal";
+import { MissionPlanTeamModal } from "@/components/ops/MissionPlanTeamModal";
 import { OperationHubModal } from "@/components/ops/OperationHubModal";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
@@ -83,6 +84,11 @@ export default function MissionsScreen() {
 
   const [showMissionModal, setShowMissionModal] = useState(false);
   const [showOpHubModal, setShowOpHubModal] = useState(false);
+  const [teamMission, setTeamMission] = useState<{
+    headerTitle: string;
+    bodyText: string;
+    opsReportId: string;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!supabase) return;
@@ -144,7 +150,10 @@ export default function MissionsScreen() {
 
   const openRow = (item: CombinedRow) => {
     if (!mapKey || mapKey.length !== 32) {
-      Alert.alert("Missions", "Set EXPO_PUBLIC_MM_MAP_SHARED_KEY or unlock main vault to decrypt team plans.");
+      Alert.alert(
+        "Missions",
+        "Team mission plans use the shared map key. It is now bundled from wrangler.toml — rebuild the app or pull latest. You can still unlock the main vault if you do not use the shared key.",
+      );
       return;
     }
     try {
@@ -165,10 +174,11 @@ export default function MissionsScreen() {
       const aad = OPS_AAD.mission_plan;
       const json = decryptUtf8(mapKey, item.encrypted_payload, aad);
       const parsed = JSON.parse(json) as MissionPlanPayloadV1;
-      Alert.alert(
-        `${parsed.title} · ${item.author_username}`,
-        formatMissionForDisplay(parsed).slice(0, 3800),
-      );
+      setTeamMission({
+        headerTitle: `${parsed.title} · ${item.author_username}`,
+        bodyText: formatMissionForDisplay(parsed),
+        opsReportId: item.id,
+      });
     } catch {
       Alert.alert("Missions", "Cannot decrypt (wrong key or author used different partition).");
     }
@@ -308,6 +318,17 @@ export default function MissionsScreen() {
         username={username}
         mapKey={mapKey}
         onSaved={() => void refresh()}
+      />
+      <MissionPlanTeamModal
+        visible={teamMission != null}
+        onClose={() => setTeamMission(null)}
+        headerTitle={teamMission?.headerTitle ?? ""}
+        bodyText={teamMission?.bodyText ?? ""}
+        opsReportId={teamMission?.opsReportId ?? null}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
       />
     </View>
   );

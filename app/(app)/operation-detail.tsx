@@ -2,16 +2,17 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
-  Alert,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  useColorScheme,
+    Alert,
+    FlatList,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
+    useColorScheme,
 } from "react-native";
 
+import { DocumentDetailModal } from "@/components/common/DocumentDetailModal";
 import { AarModal } from "@/components/ops/AarModal";
 import { IntelReportModal } from "@/components/ops/IntelReportModal";
 import { MissionPlanModal } from "@/components/ops/MissionPlanModal";
@@ -20,21 +21,22 @@ import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
 import Colors from "@/constants/Colors";
 import { decryptUtf8 } from "@/lib/crypto/aesGcm";
 import {
-  OPERATION_HUB_AAD,
-  OPS_AAD,
-  formatAarForDisplay,
-  formatIntelReportForDisplay,
-  formatMissionForDisplay,
-  formatSitrepForDisplay,
-  formatTargetPackageForDisplay,
-  previewOpsRow,
-  type AarPayloadV1,
-  type IntelReportPayloadV1,
-  type MissionPlanPayloadV1,
-  type OperationHubPayloadV1,
-  type OpsDocKind,
-  type SitrepPayloadV1,
-  type TargetPackagePayloadV1,
+    OPERATION_HUB_AAD,
+    OPS_AAD,
+    formatAarForDisplay,
+    formatDocKindLabel,
+    formatIntelReportForDisplay,
+    formatMissionForDisplay,
+    formatSitrepForDisplay,
+    formatTargetPackageForDisplay,
+    previewOpsRow,
+    type AarPayloadV1,
+    type IntelReportPayloadV1,
+    type MissionPlanPayloadV1,
+    type OperationHubPayloadV1,
+    type OpsDocKind,
+    type SitrepPayloadV1,
+    type TargetPackagePayloadV1,
 } from "@/lib/opsReports";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
@@ -87,6 +89,7 @@ export default function OperationDetailScreen() {
   const [showAar, setShowAar] = useState(false);
   const [showTarget, setShowTarget] = useState(false);
   const [showIntel, setShowIntel] = useState(false);
+  const [docDetail, setDocDetail] = useState<{ title: string; body: string; subtitle: string } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!supabase || !opId) return;
@@ -140,8 +143,11 @@ export default function OperationDetailScreen() {
       const aad = OPS_AAD[row.doc_kind];
       const json = decryptUtf8(mapKey, row.encrypted_payload, aad);
       let body = json;
+      let displayTitle = previewOpsRow(row.doc_kind, json);
       if (row.doc_kind === "mission_plan") {
-        body = formatMissionForDisplay(JSON.parse(json) as MissionPlanPayloadV1);
+        const p = JSON.parse(json) as MissionPlanPayloadV1;
+        displayTitle = p.title || displayTitle;
+        body = formatMissionForDisplay(p);
       } else if (row.doc_kind === "sitrep") {
         body = formatSitrepForDisplay(JSON.parse(json) as SitrepPayloadV1);
       } else if (row.doc_kind === "aar") {
@@ -151,7 +157,11 @@ export default function OperationDetailScreen() {
       } else if (row.doc_kind === "intel_report") {
         body = formatIntelReportForDisplay(JSON.parse(json) as IntelReportPayloadV1);
       }
-      Alert.alert(`${row.doc_kind} · ${row.author_username}`, body.slice(0, 3800));
+      setDocDetail({
+        title: displayTitle,
+        body,
+        subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
+      });
     } catch {
       Alert.alert("Reports", "Cannot decrypt.");
     }
@@ -241,17 +251,32 @@ export default function OperationDetailScreen() {
             }
             return (
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${formatDocKindLabel(item.doc_kind)}: ${headline}`}
                 style={[styles.card, { borderColor: p.tabIconDefault }]}
                 onPress={() => openReport(item)}>
-                <Text style={[styles.cardTitle, { color: p.text }]}>{headline}</Text>
-                <Text style={[styles.cardMeta, { color: p.tabIconDefault }]}>
-                  {item.doc_kind} · {item.author_username}
-                </Text>
+                <View style={styles.cardRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.cardTitle, { color: p.text }]}>{headline}</Text>
+                    <Text style={[styles.cardMeta, { color: p.tabIconDefault }]}>
+                      {formatDocKindLabel(item.doc_kind)} · {item.author_username}
+                    </Text>
+                  </View>
+                  <Text style={[styles.chevron, { color: p.tint }]}>›</Text>
+                </View>
               </Pressable>
             );
           }}
         />
       )}
+
+      <DocumentDetailModal
+        visible={docDetail != null}
+        title={docDetail?.title ?? ""}
+        subtitle={docDetail?.subtitle}
+        body={docDetail?.body ?? ""}
+        onClose={() => setDocDetail(null)}
+      />
 
       <MissionPlanModal
         visible={showMission}
@@ -337,6 +362,8 @@ const styles = StyleSheet.create({
   bigBtnTx: { fontSize: 15, fontWeight: "800" },
   bigBtnTxOutline: { fontSize: 15, fontWeight: "800" },
   card: { borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 8 },
+  cardRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   cardTitle: { fontWeight: "700", fontSize: 15 },
   cardMeta: { fontSize: 12, marginTop: 4 },
+  chevron: { fontSize: 26, fontWeight: "300", marginTop: -2 },
 });

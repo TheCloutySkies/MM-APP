@@ -1,9 +1,11 @@
+import { DocumentDetailModal } from "@/components/common/DocumentDetailModal";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,7 +16,15 @@ import {
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { encryptUtf8, decryptUtf8 } from "@/lib/crypto/aesGcm";
-import { GEAR_LOADOUT_AAD, type GearLineItem, type GearLoadoutPayloadV1 } from "@/lib/opsReports";
+import {
+  GEAR_LOADOUT_AAD,
+  GEAR_LOADOUT_TYPES,
+  gearLoadoutTypeLabel,
+  normalizeGearLoadoutPayload,
+  type GearLineItem,
+  type GearLoadoutPayloadV2,
+  type GearLoadoutTypeId,
+} from "@/lib/opsReports";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
 function newId() {
@@ -50,9 +60,18 @@ export default function GearScreen() {
 
   const [rows, setRows] = useState<Row[]>([]);
   const [loadoutName, setLoadoutName] = useState("");
+  const [loadoutType, setLoadoutType] = useState<GearLoadoutTypeId>("kit");
+  const [preparedByName, setPreparedByName] = useState("");
   const [l1, setL1] = useState("");
   const [l2, setL2] = useState("");
   const [l3, setL3] = useState("");
+  const [detail, setDetail] = useState<{ title: string; body: string; subtitle: string } | null>(null);
+
+  useEffect(() => {
+    if (username?.trim()) {
+      setPreparedByName((prev) => (prev.trim() ? prev : username.trim()));
+    }
+  }, [username]);
 
   const linesFromRaw = (raw: string): GearLineItem[] =>
     raw
@@ -89,9 +108,15 @@ export default function GearScreen() {
       Alert.alert("Gear", "Name this loadout.");
       return;
     }
-    const payload: GearLoadoutPayloadV1 = {
-      v: 1,
+    if (!preparedByName.trim()) {
+      Alert.alert("Gear", "Add your name so the team knows who owns this list.");
+      return;
+    }
+    const payload: GearLoadoutPayloadV2 = {
+      v: 2,
+      loadoutType,
       name: loadoutName.trim(),
+      preparedByName: preparedByName.trim(),
       line1: linesFromRaw(l1),
       line2: linesFromRaw(l2),
       line3: linesFromRaw(l3),
@@ -118,16 +143,26 @@ export default function GearScreen() {
     if (!mapKey || mapKey.length !== 32) return;
     try {
       const json = decryptUtf8(mapKey, row.encrypted_payload, GEAR_LOADOUT_AAD);
-      const o = JSON.parse(json) as GearLoadoutPayloadV1;
+      const o = normalizeGearLoadoutPayload(JSON.parse(json), row.author_username);
+      if (!o) {
+        Alert.alert("Gear", "Unknown loadout format.");
+        return;
+      }
       const block = (label: string, items: GearLineItem[]) =>
         `${label}\n${items.map((x) => `  [${x.packed ? "x" : " "}] ${x.label}`).join("\n") || "  —"}`;
-      Alert.alert(
-        o.name,
-        [block("Line 1 · on body", o.line1 ?? EMPTY_LINES), block("Line 2 · fighting load", o.line2 ?? EMPTY_LINES), block(
-          "Line 3 · sustainment",
-          o.line3 ?? EMPTY_LINES,
-        )].join("\n\n"),
-      );
+      const body = [
+        `Type: ${gearLoadoutTypeLabel(o.loadoutType)}`,
+        `Prepared by: ${o.preparedByName}`,
+        "",
+        block("Line 1 · on body", o.line1 ?? EMPTY_LINES),
+        block("Line 2 · fighting load", o.line2 ?? EMPTY_LINES),
+        block("Line 3 · sustainment", o.line3 ?? EMPTY_LINES),
+      ].join("\n");
+      setDetail({
+        title: o.name,
+        subtitle: `${gearLoadoutTypeLabel(o.loadoutType)} · ${row.author_username} · saved ${row.created_at}`,
+        body,
+      });
     } catch {
       Alert.alert("Gear", "Cannot decrypt.");
     }
@@ -145,8 +180,34 @@ export default function GearScreen() {
   return (
     <View style={[styles.wrap, { backgroundColor: p.background }]}>
       <Text style={[styles.lede, { color: p.tabIconDefault }]}>
-        Line 1–3 loadouts (one item per line in each box). Stored encrypted like bulletin / ops.
+        Line 1–3 loadouts (one item per line in each box). Pick a type and your name — ciphertext matches bulletin /
+        ops; the team sees type + name after decrypt.
       </Text>
+      <Text style={[styles.label, { color: p.tabIconDefault }]}>Loadout type</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeRow}>
+        {GEAR_LOADOUT_TYPES.map((t) => (
+          <Pressable
+            key={t.id}
+            onPress={() => setLoadoutType(t.id)}
+            style={[
+              styles.typeChip,
+              {
+                borderColor: loadoutType === t.id ? p.tint : TacticalPalette.border,
+                backgroundColor: loadoutType === t.id ? (scheme === "dark" ? "#1e293b" : "#eff6ff") : "transparent",
+              },
+            ]}>
+            <Text style={[styles.typeChipTx, { color: p.text }]}>{t.label}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      <Text style={[styles.label, { color: p.tabIconDefault }]}>Your name (shown to team)</Text>
+      <TextInput
+        value={preparedByName}
+        onChangeText={setPreparedByName}
+        style={input}
+        placeholder="Callsign or full name"
+        placeholderTextColor="#888"
+      />
       <Text style={[styles.label, { color: p.tabIconDefault }]}>Loadout name</Text>
       <TextInput value={loadoutName} onChangeText={setLoadoutName} style={input} placeholderTextColor="#888" />
       <Text style={[styles.label, { color: p.tabIconDefault }]}>Line 1 — on body</Text>
@@ -185,23 +246,39 @@ export default function GearScreen() {
         ListHeaderComponent={<Text style={[styles.listHead, { color: p.tabIconDefault }]}>Saved loadouts</Text>}
         renderItem={({ item }) => {
           let name = "…";
+          let typeL = "";
+          let by = "";
           if (mapKey?.length === 32) {
             try {
               const json = decryptUtf8(mapKey, item.encrypted_payload, GEAR_LOADOUT_AAD);
-              name = (JSON.parse(json) as GearLoadoutPayloadV1).name;
+              const o = normalizeGearLoadoutPayload(JSON.parse(json), item.author_username);
+              if (o) {
+                name = o.name;
+                typeL = gearLoadoutTypeLabel(o.loadoutType);
+                by = o.preparedByName;
+              }
             } catch {
               name = "(locked)";
             }
           }
           return (
             <Pressable style={[styles.card, { borderColor: TacticalPalette.border }]} onPress={() => openRow(item)}>
+              <Text style={[styles.cardKicker, { color: p.tint }]}>{typeL || "—"}</Text>
               <Text style={[styles.cardTitle, { color: p.text }]}>{name}</Text>
               <Text style={[styles.cardMeta, { color: p.tabIconDefault }]}>
+                {by ? `${by} · ` : ""}
                 {item.author_username} · {item.created_at}
               </Text>
             </Pressable>
           );
         }}
+      />
+      <DocumentDetailModal
+        visible={detail != null}
+        title={detail?.title ?? ""}
+        subtitle={detail?.subtitle}
+        body={detail?.body ?? ""}
+        onClose={() => setDetail(null)}
       />
     </View>
   );
@@ -216,7 +293,11 @@ const styles = StyleSheet.create({
   save: { marginTop: 14, paddingVertical: 14, borderRadius: 12, alignItems: "center" },
   saveTx: { fontSize: 16, fontWeight: "800" },
   listHead: { fontSize: 11, fontWeight: "800", letterSpacing: 0.6, marginBottom: 8 },
+  typeRow: { flexDirection: "row", gap: 8, paddingVertical: 4, marginBottom: 8 },
+  typeChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  typeChipTx: { fontSize: 13, fontWeight: "700" },
   card: { borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 8 },
+  cardKicker: { fontSize: 11, fontWeight: "800", letterSpacing: 0.4, marginBottom: 4 },
   cardTitle: { fontSize: 16, fontWeight: "700" },
   cardMeta: { fontSize: 12, marginTop: 4 },
 });

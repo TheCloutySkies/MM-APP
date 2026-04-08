@@ -10,6 +10,12 @@ export type ForensicsReport = {
   magic: string;
   sha256Hex: string;
   imageSize: { width: number; height: number } | null;
+  /** Shannon entropy of raw bytes (0–8); high ≈ compressed/encrypted/random. */
+  shannonEntropyBits: number;
+  /** First 48 bytes as hex (for manual inspection). */
+  hexHead: string;
+  utf8Status: "valid" | "invalid" | "empty";
+  printableAsciiRatio: number;
   exifSummary: {
     hasExif: boolean;
     hasGps: boolean;
@@ -18,6 +24,26 @@ export type ForensicsReport = {
     tagCounts: Record<string, number>;
   };
 };
+
+function shannonEntropyBits(bytes: Uint8Array): number {
+  if (bytes.length === 0) return 0;
+  const counts = new Uint32Array(256);
+  for (let i = 0; i < bytes.length; i++) counts[bytes[i]!] += 1;
+  let e = 0;
+  const n = bytes.length;
+  for (let b = 0; b < 256; b++) {
+    const c = counts[b];
+    if (c === 0) continue;
+    const p = c / n;
+    e -= p * Math.log2(p);
+  }
+  return e;
+}
+
+function hexPrefix(bytes: Uint8Array, max = 48): string {
+  const slice = bytes.slice(0, Math.min(max, bytes.length));
+  return Array.from(slice, (b) => b.toString(16).padStart(2, "0")).join(" ");
+}
 
 function sniffMagic(bytes: Uint8Array): { label: string; mime: string } {
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
@@ -118,6 +144,24 @@ export async function buildForensicsReport(
     tryImageBitmapSize(bytes, mimeGuess),
   ]);
 
+  let utf8Status: ForensicsReport["utf8Status"] = "empty";
+  if (bytes.length > 0) {
+    try {
+      const dec = new TextDecoder("utf-8", { fatal: true });
+      dec.decode(bytes);
+      utf8Status = "valid";
+    } catch {
+      utf8Status = "invalid";
+    }
+  }
+
+  let printable = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i]!;
+    if (b >= 32 && b <= 126) printable += 1;
+  }
+  const printableAsciiRatio = bytes.length ? printable / bytes.length : 0;
+
   return {
     fileName,
     byteLength: bytes.length,
@@ -125,6 +169,10 @@ export async function buildForensicsReport(
     magic: magic.label,
     sha256Hex: sha256,
     imageSize: imageSize ?? null,
+    shannonEntropyBits: shannonEntropyBits(bytes),
+    hexHead: hexPrefix(bytes, 48),
+    utf8Status,
+    printableAsciiRatio,
     exifSummary,
   };
 }
