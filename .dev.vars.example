@@ -1,0 +1,12 @@
+# Local secrets for `wrangler dev` / `wrangler deploy` (same shape as Worker variables).
+# Copy to `.dev.vars` and fill in — `.dev.vars` is gitignored.
+
+EXPO_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_anon_or_publishable_key
+# Optional: 64 hex chars = team shared encryption for map / bulletin / ops
+EXPO_PUBLIC_MM_MAP_SHARED_KEY=
+
+# Optional
+# EXPO_PUBLIC_DISTRESS_WEBHOOK_URL=
+# EXPO_PUBLIC_SUPERMAP_API_URL=
+# EXPO_PUBLIC_MM_GEO_PROXY_URL=

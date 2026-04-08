@@ -4,7 +4,7 @@ const path = require("path");
 
 const appJson = require("./app.json");
 
-/** When .env is missing, mirror wrangler.toml [vars] so Expo dev / export match Worker-injected web. */
+/** When .env is missing, optionally parse wrangler.toml if you add [vars] locally (not committed). Prefer .env. */
 function readExpoPublicFromWrangler() {
   try {
     const wranglerPath = path.join(__dirname, "wrangler.toml");

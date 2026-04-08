@@ -52,6 +52,7 @@ For **preview / non-production branches**, Cloudflare may use `npx wrangler vers
 
 - The inline editor may still show “Hello world” until a successful **`wrangler deploy`** replaces the script with `worker/index.js` + assets from the repo.
 - **`name` in `wrangler.toml`** is `mm-app`; change it if your Worker uses a different name in the dashboard.
+- **Runtime injection:** This Worker also injects `EXPO_PUBLIC_*` into HTML from **Worker variables** (Dashboard → Settings → Variables). Keep real URLs and keys out of git — use Dashboard or local `.dev.vars` (see `.dev.vars.example`).
 
 ### Cloudflare Pages (no Git)
 

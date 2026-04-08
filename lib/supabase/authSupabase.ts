@@ -14,8 +14,8 @@ export function getAuthSupabase(): SupabaseClient {
     if (!url || !key) {
       throw new Error(
         "Missing Supabase URL or anon/publishable key. Set EXPO_PUBLIC_SUPABASE_URL and " +
-          "EXPO_PUBLIC_SUPABASE_ANON_KEY in a project root .env, or add them under [vars] in " +
-          "wrangler.toml (app.config.js falls back to wrangler when env is empty). Restart Expo with: npx expo start -c",
+          "EXPO_PUBLIC_SUPABASE_ANON_KEY in a root .env (see .env.example), or for web deploy set Worker variables in " +
+          "the Cloudflare Dashboard. Restart Expo with: npx expo start -c",
       );
     }
     _authClient = createClient(url, key, {
