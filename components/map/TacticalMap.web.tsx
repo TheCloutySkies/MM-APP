@@ -3,13 +3,13 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 
 import type {
-  MapBaseLayerId,
-  MapFlyToRequest,
-  MapPin,
-  MapPolygonOverlay,
-  MapPolylineOverlay,
-  MapPointerMode,
-  MapUserLocation,
+    MapBaseLayerId,
+    MapFlyToRequest,
+    MapPin,
+    MapPointerMode,
+    MapPolygonOverlay,
+    MapPolylineOverlay,
+    MapUserLocation,
 } from "./mapTypes";
 
 export type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay };
@@ -25,6 +25,7 @@ type Props = {
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
+  mapDimPercent?: number;
 };
 
 /**

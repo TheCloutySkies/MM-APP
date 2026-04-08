@@ -2,13 +2,13 @@ import type { ComponentType } from "react";
 import { Platform } from "react-native";
 
 import type {
-  MapBaseLayerId,
-  MapFlyToRequest,
-  MapPin,
-  MapPolygonOverlay,
-  MapPolylineOverlay,
-  MapPointerMode,
-  MapUserLocation,
+    MapBaseLayerId,
+    MapFlyToRequest,
+    MapPin,
+    MapPointerMode,
+    MapPolygonOverlay,
+    MapPolylineOverlay,
+    MapUserLocation,
 } from "./mapTypes";
 
 export type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay };
@@ -25,6 +25,8 @@ type Props = {
   pointerMode?: MapPointerMode;
   /** Map center update (used for crosshair coordinate readout). */
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
+  /** 0–100: extra darken (Night Ops basemap); 0 disables. */
+  mapDimPercent?: number;
 };
 
 /**

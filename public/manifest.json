@@ -1,0 +1,18 @@
+{
+  "name": "MM Tactical",
+  "short_name": "MM",
+  "description": "Tactical C4ISR-style PWA — vault, map, and team tools.",
+  "start_url": ".",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d0f0c",
+  "theme_color": "#0d0f0c",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon",
+      "purpose": "any"
+    }
+  ]
+}

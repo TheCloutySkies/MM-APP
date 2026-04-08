@@ -7,6 +7,7 @@ import {
     Alert,
     FlatList,
     Modal,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -23,6 +24,13 @@ import { TacticalPalette } from "@/constants/TacticalTheme";
 import { aes256GcmDecrypt, aes256GcmEncrypt, decryptUtf8, encryptUtf8, type AeadBundle } from "@/lib/crypto/aesGcm";
 import { utf8, utf8decode } from "@/lib/crypto/bytes";
 import { runCloutVisionPipeline } from "@/lib/media/cloutVision";
+import {
+    loadVaultOpsSnapshot,
+    loadVaultPrivateSnapshot,
+    saveVaultOpsSnapshot,
+    saveVaultPrivateSnapshot,
+} from "@/lib/offline/vaultWebCache";
+import { isWebOnline } from "@/lib/offline/webOnline";
 import {
     OPS_AAD,
     VAULT_FOLDER_NAME_AAD,
@@ -131,13 +139,15 @@ export default function VaultScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [teamHubOpen, setTeamHubOpen] = useState(false);
+  /** Web: index was hydrated from IndexedDB while offline. */
+  const [vaultFromCache, setVaultFromCache] = useState(false);
   const viewMode = useMMStore((s) => s.vaultDriveViewMode);
   const setVaultDriveViewMode = useMMStore((s) => s.setVaultDriveViewMode);
 
   const prefix = vaultMode ?? "main";
 
-  const refreshFolders = useCallback(async () => {
-    if (!supabase) return;
+  const refreshFolders = useCallback(async (): Promise<VaultFolderRow[]> => {
+    if (!supabase) return [];
     const { data, error } = await supabase
       .from("vault_folders")
       .select("id, parent_id, encrypted_name, created_by")
@@ -145,12 +155,25 @@ export default function VaultScreen() {
     if (error) {
       console.warn(error.message);
       setFolders([]);
-      return;
+      return [];
     }
-    setFolders((data ?? []) as VaultFolderRow[]);
+    const list = (data ?? []) as VaultFolderRow[];
+    setFolders(list);
+    return list;
   }, [supabase]);
 
   const refreshPrivate = useCallback(async () => {
+    if (Platform.OS === "web" && !isWebOnline() && profileId) {
+      const snap = await loadVaultPrivateSnapshot(profileId);
+      if (snap) {
+        setRows(snap.objects);
+        setFolders(snap.folders);
+        setVaultFromCache(true);
+      } else {
+        setVaultFromCache(false);
+      }
+      return;
+    }
     if (!supabase) return;
     const { data, error } = await supabase
       .from("vault_objects")
@@ -160,9 +183,14 @@ export default function VaultScreen() {
       Alert.alert("Vault list", error.message);
       return;
     }
-    setRows((data ?? []) as VaultObjectRow[]);
-    await refreshFolders();
-  }, [supabase, refreshFolders]);
+    const list = (data ?? []) as VaultObjectRow[];
+    setRows(list);
+    const folderList = await refreshFolders();
+    if (Platform.OS === "web" && profileId) {
+      await saveVaultPrivateSnapshot(profileId, list, folderList);
+    }
+    setVaultFromCache(false);
+  }, [supabase, refreshFolders, profileId]);
 
   const createMapPointsFolder = async () => {
     if (!supabase || !profileId || !mapKey || mapKey.length !== 32) {
@@ -211,6 +239,17 @@ export default function VaultScreen() {
 
   const refreshOps = useCallback(
     async (kind: OpsDocKind) => {
+      if (Platform.OS === "web" && !isWebOnline() && profileId) {
+        const cached = await loadVaultOpsSnapshot(profileId, kind);
+        if (cached != null) {
+          setOpsRows(cached as OpsReportRow[]);
+          setVaultFromCache(true);
+        } else {
+          setOpsRows([]);
+          setVaultFromCache(false);
+        }
+        return;
+      }
       if (!supabase) return;
       const { data, error } = await supabase
         .from("ops_reports")
@@ -220,11 +259,17 @@ export default function VaultScreen() {
       if (error) {
         Alert.alert("Team reports", error.message);
         setOpsRows([]);
+        setVaultFromCache(false);
         return;
       }
-      setOpsRows((data ?? []) as OpsReportRow[]);
+      const list = (data ?? []) as OpsReportRow[];
+      setOpsRows(list);
+      if (Platform.OS === "web" && profileId) {
+        await saveVaultOpsSnapshot(profileId, kind, list);
+      }
+      setVaultFromCache(false);
     },
-    [supabase],
+    [supabase, profileId],
   );
 
   const refresh = useCallback(async () => {
@@ -240,6 +285,10 @@ export default function VaultScreen() {
   );
 
   const uploadBytes = async (raw: Uint8Array, mimeHint?: string) => {
+    if (Platform.OS === "web" && !isWebOnline()) {
+      Alert.alert("Offline", "Reconnect to upload encrypted files to your vault.");
+      return;
+    }
     if (!supabase || !profileId || !key || key.length !== 32) {
       Alert.alert("Vault", "Not ready.");
       return;
@@ -288,6 +337,13 @@ export default function VaultScreen() {
   };
 
   const openPrivateRow = async (row: VaultObjectRow) => {
+    if (Platform.OS === "web" && !isWebOnline()) {
+      Alert.alert(
+        "Offline",
+        "Encrypted files live in cloud storage. Reconnect to download and decrypt this object.",
+      );
+      return;
+    }
     if (!supabase || !key || key.length !== 32) return;
     setLoading(true);
     try {
@@ -643,6 +699,21 @@ export default function VaultScreen() {
 
   return (
     <View style={[styles.shell, { backgroundColor: p.background }]}>
+      {Platform.OS === "web" && vaultFromCache ? (
+        <View
+          style={{
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            backgroundColor: "rgba(107, 142, 92, 0.16)",
+            borderBottomWidth: StyleSheet.hairlineWidth,
+            borderBottomColor: borderM,
+          }}>
+          <Text style={{ color: TacticalPalette.bone, fontSize: 12, lineHeight: 17 }}>
+            Offline — showing the last vault index cached in this browser. Reconnect to refresh, upload, or download file
+            bodies from storage.
+          </Text>
+        </View>
+      ) : null}
       <View style={styles.driveRowLayout}>
         <View
           style={[

@@ -40,7 +40,7 @@ export type MapFlyToRequest = {
   seq: number;
 };
 
-export type MapBaseLayerId = "osm" | "osm_dark" | "topo" | "satellite";
+export type MapBaseLayerId = "osm" | "osm_dark" | "topo" | "satellite" | "hybrid";
 
 /** `crosshair` while placing routes / pins; map uses grab when panning (web Leaflet default). */
 export type MapPointerMode = "default" | "crosshair";

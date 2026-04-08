@@ -1,16 +1,16 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-  useColorScheme,
-  useWindowDimensions,
+    Alert,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+    useColorScheme,
+    useWindowDimensions,
 } from "react-native";
 
 import Colors from "@/constants/Colors";
@@ -19,12 +19,12 @@ import { base64ToBytes, bytesToBase64, hexToBytes, utf8, utf8decode } from "@/li
 import { idbDel, idbGet, idbSet } from "@/lib/signals/idb";
 import { aesGcmDecryptTextFromBundle, aesGcmEncryptTextToBundle, randomBytes } from "@/lib/signals/subtle";
 import {
-  exportPrivateKeyPkcs8,
-  exportPublicKeySpkiB64,
-  generateWhisperKeypair,
-  importPrivateKeyPkcs8,
-  whisperDecrypt,
-  whisperEncrypt,
+    exportPrivateKeyPkcs8,
+    exportPublicKeySpkiB64,
+    generateWhisperKeypair,
+    importPrivateKeyPkcs8,
+    whisperDecrypt,
+    whisperEncrypt,
 } from "@/lib/signals/whisper";
 import { useMMStore } from "@/store/mmStore";
 
@@ -38,13 +38,119 @@ type SignalTabId =
   | "stego"
   | "legacy";
 
-const TABS: { id: SignalTabId; label: string; icon: any }[] = [
-  { id: "aes", label: "AES-256-GCM", icon: "lock" },
-  { id: "whisper", label: "Asymmetric (Whisper)", icon: "exchange" },
-  { id: "otp", label: "One-Time Pad", icon: "th" },
-  { id: "compressor", label: "Radio/Mesh Compressor", icon: "compress" },
-  { id: "stego", label: "Steganography", icon: "image" },
-  { id: "legacy", label: "Field encodings", icon: "keyboard-o" },
+/**
+ * Ordering: least → most secure (approximate).
+ * Compressor / legacy are not strong confidentiality; OTP assumes ideal random, single-use pads.
+ */
+type ModeMenuItem = { rank: number; tab: SignalTabId; title: string; subtitle: string };
+
+const ENCODE_OPERATIONS: ModeMenuItem[] = [
+  {
+    rank: 1,
+    tab: "legacy",
+    title: "Field encodings",
+    subtitle: "Morse, Vigenère, Base64, Hex — obfuscation / format only",
+  },
+  {
+    rank: 2,
+    tab: "compressor",
+    title: "Radio / mesh compressor",
+    subtitle: "Brevity & shortening — not encryption",
+  },
+  {
+    rank: 3,
+    tab: "stego",
+    title: "Steganography (LSB)",
+    subtitle: "Hide ciphertext in an image (web)",
+  },
+  {
+    rank: 4,
+    tab: "aes",
+    title: "AES-256-GCM",
+    subtitle: "Passphrase + authenticated ciphertext (JSON bundle)",
+  },
+  {
+    rank: 5,
+    tab: "whisper",
+    title: "Whisper (ECDH)",
+    subtitle: "Asymmetric; derive shared key, AES-GCM payload",
+  },
+  {
+    rank: 6,
+    tab: "otp",
+    title: "One-time pad",
+    subtitle: "Generate random A–Z pad — strongest if pad is single-use",
+  },
+];
+
+/** Decode-capable tools only (same security order where applicable). */
+const DECODE_OPERATIONS: ModeMenuItem[] = [
+  {
+    rank: 1,
+    tab: "legacy",
+    title: "Field encodings",
+    subtitle: "Decode Morse, Vigenère, Base64, Hex",
+  },
+  {
+    rank: 2,
+    tab: "stego",
+    title: "Steganography (LSB)",
+    subtitle: "Extract hidden text (web)",
+  },
+  {
+    rank: 3,
+    tab: "aes",
+    title: "AES-256-GCM",
+    subtitle: "Decrypt JSON bundle with passphrase",
+  },
+  {
+    rank: 4,
+    tab: "whisper",
+    title: "Whisper (ECDH)",
+    subtitle: "Decrypt envelope with your private key",
+  },
+];
+
+type MethodBlurb = { title: string; how: string; goodFor: string; security: string };
+
+/** Plain reference copy when Encode/Decode menus are closed. */
+const METHODS_AT_A_GLANCE: MethodBlurb[] = [
+  {
+    title: "Field encodings",
+    how: "Morse maps letters to a dot-dash pattern. Vigenère reuses a keyword to shift letters each step. Base64 and hex turn raw bytes into text you can paste anywhere.",
+    goodFor: "Voice readbacks, cutting noise on busy text channels, moving small payloads through tools that hate binary.",
+    security: "Low. This is classical ciphers and formats, not modern secrecy. Count on traffic analysis and guessing if an adversary gets the ciphertext.",
+  },
+  {
+    title: "Radio and mesh compressor",
+    how: "Swaps long phrases for brevity codewords, strips filler words, optionally drops vowels from longer words, and can rewrite decimal lat/lng into an MGRS grid.",
+    goodFor: "LoRa, mesh, or HF when you care about byte count and time on air more than polish.",
+    security: "None for confidentiality. It only shrinks text. If the text is sensitive, encrypt it with something real, then compress if you still need length.",
+  },
+  {
+    title: "Steganography",
+    how: "Writes your message into the least significant bits of an image so the picture still looks normal to the eye.",
+    goodFor: "When you need the file to look innocent crossing a checkpoint or inbox filter.",
+    security: "Hiding is not the same as locking. Forensics tools can flag LSB tampering. Encrypt first, then hide, if the payload matters.",
+  },
+  {
+    title: "AES-256-GCM",
+    how: "Your passphrase feeds PBKDF2, which outputs a 256-bit key. AES-GCM encrypts the bytes and produces an authentication tag so flipped bits fail decrypt.",
+    goodFor: "Teams that already share a strong passphrase out of band and want copy-paste JSON between phones or radios.",
+    security: "High when the passphrase is long, random, and never reused across unrelated groups. Weak if the phrase is short, reused, or written on a whiteboard.",
+  },
+  {
+    title: "Whisper (ECDH)",
+    how: "Each operator keeps a private key and hands out a public key. To send, you mix your private key with the recipient public key, derive a shared secret, and run AES-GCM on the message.",
+    goodFor: "Groups that outgrow one shared password and need pairwise or roster-based messaging without passing the master secret on the wire.",
+    security: "High if keys stay on device and you verify fingerprints in person or on a trusted channel. Lose the private key and older ciphertext is gone for you. Wrong public key means you encrypt for the wrong person.",
+  },
+  {
+    title: "One-time pad",
+    how: "You generate a random pad at least as long as the message and combine pad and text with modular math. The pad burns after use.",
+    goodFor: "Paper-first workflows, air-gapped prep, or any time you will manage physical custody of random material.",
+    security: "Matches the quality of your random source and your discipline. Random must be unbiased, pad never reused, pad kept as secret as the message. Slip once and the whole model collapses.",
+  },
 ];
 
 const MONO_FONT = Platform.OS === "ios" ? "Menlo" : "monospace";
@@ -179,17 +285,90 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+function MethodsAtAGlancePanel(props: {
+  textColor: string;
+  mutedColor: string;
+  borderColor: string;
+  tint: string;
+  onTintLabel: string;
+  onClose: () => void;
+}) {
+  return (
+    <View style={styles.methodsAtAGlanceWrap}>
+      <ScrollView
+        style={styles.methodsAtAGlanceScroll}
+        contentContainerStyle={styles.methodsAtAGlanceContent}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled">
+        <Text style={[styles.methodsAtAGlanceHead, { color: props.textColor }]}>Methods at a glance</Text>
+        <Text style={[styles.methodsAtAGlanceSub, { color: props.mutedColor }]}>
+          Plain comparison of each option. Nothing here leaves your browser.
+        </Text>
+        {METHODS_AT_A_GLANCE.map((m) => (
+          <View key={m.title} style={[styles.methodBlurbBlock, { borderColor: props.borderColor }]}>
+            <Text style={[styles.methodBlurbTitle, { color: props.textColor }]}>{m.title}</Text>
+            <Text style={[styles.methodBlurbLead, { color: props.textColor }]}>How it works</Text>
+            <Text style={[styles.methodBlurbBody, { color: props.mutedColor }]}>{m.how}</Text>
+            <Text style={[styles.methodBlurbLead, { color: props.textColor, marginTop: 8 }]}>Good for</Text>
+            <Text style={[styles.methodBlurbBody, { color: props.mutedColor }]}>{m.goodFor}</Text>
+            <Text style={[styles.methodBlurbLead, { color: props.textColor, marginTop: 8 }]}>Security</Text>
+            <Text style={[styles.methodBlurbBody, { color: props.mutedColor }]}>{m.security}</Text>
+          </View>
+        ))}
+        <Pressable
+          onPress={props.onClose}
+          style={[styles.primaryBtn, { backgroundColor: props.tint, marginTop: 14 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Back to tool workspace">
+          <Text style={[styles.primaryBtnTx, { color: props.onTintLabel }]}>Back to tool</Text>
+        </Pressable>
+      </ScrollView>
+    </View>
+  );
+}
+
 export default function SignalsScreen() {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
-  const { width, height } = useWindowDimensions();
+  const { width } = useWindowDimensions();
   const desktopSplit = Platform.OS === "web" && width >= 980;
 
   const [mode, setMode] = useState<Mode>("encode");
   const [tab, setTab] = useState<SignalTabId>("aes");
   const [guideOpen, setGuideOpen] = useState(desktopSplit);
+  const [encodeMenuOpen, setEncodeMenuOpen] = useState(false);
+  const [decodeMenuOpen, setDecodeMenuOpen] = useState(false);
+  /** When true, show only the method reference. Never stack reference + tool UI. */
+  const [methodReferenceOpen, setMethodReferenceOpen] = useState(false);
 
   const guide = useQuickGuide(tab, mode);
+  const onTintLabel = scheme === "dark" ? "#0f172a" : "#ffffff";
+
+  /** OTP + compressor are encode-oriented in this UI. */
+  useEffect(() => {
+    if ((tab === "otp" || tab === "compressor") && mode === "decode") {
+      setMode("encode");
+    }
+  }, [tab, mode]);
+
+  const closeModeMenus = () => {
+    setEncodeMenuOpen(false);
+    setDecodeMenuOpen(false);
+  };
+
+  const pickEncode = (nextTab: SignalTabId) => {
+    setTab(nextTab);
+    setMode("encode");
+    setMethodReferenceOpen(false);
+    closeModeMenus();
+  };
+
+  const pickDecode = (nextTab: SignalTabId) => {
+    setTab(nextTab);
+    setMode("decode");
+    setMethodReferenceOpen(false);
+    closeModeMenus();
+  };
 
   const paneStyle = desktopSplit ? styles.splitRow : styles.splitCol;
   const opPaneStyle = desktopSplit ? styles.leftPane : styles.topPane;
@@ -197,79 +376,224 @@ export default function SignalsScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: p.background }]}>
+      {(encodeMenuOpen || decodeMenuOpen) && (
+        <Pressable
+          accessibilityLabel="Close menu"
+          onPress={closeModeMenus}
+          style={styles.modeMenuBackdrop}
+        />
+      )}
       <View style={[styles.head, { borderBottomColor: TacticalPalette.border }]}>
-        <Text style={[styles.h1, { color: p.text }]}>Signals</Text>
+        <Text style={[styles.h1, { color: p.text }]}>Ciphers</Text>
         <Text style={[styles.sub, { color: p.tabIconDefault }]}>
           Client-side only. Copy/paste bundles for off-grid use.
         </Text>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.tabRow}>
-        {TABS.map((t) => (
+      <View style={[styles.modeMenuBar, { borderBottomColor: TacticalPalette.border }]}>
+        <View style={styles.modeAnchor}>
           <Pressable
-            key={t.id}
-            onPress={() => setTab(t.id)}
+            onPress={() => {
+              setDecodeMenuOpen(false);
+              setEncodeMenuOpen((v) => !v);
+            }}
             style={[
-              styles.tabChip,
-              {
-                borderColor: tab === t.id ? p.tint : TacticalPalette.border,
-                backgroundColor: tab === t.id ? TacticalPalette.panel : "transparent",
-              },
-            ]}>
-            <FontAwesome name={t.icon} size={14} color={tab === t.id ? p.tint : p.tabIconDefault} />
-            <Text style={[styles.tabChipTx, { color: p.text }]}>{t.label}</Text>
+              styles.modeBtn,
+              mode === "encode" && { borderColor: p.tint, backgroundColor: TacticalPalette.panel },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Encode or encrypt — choose method"
+            accessibilityState={{ expanded: encodeMenuOpen, selected: mode === "encode" }}>
+            <View style={styles.modeBtnInner}>
+              <Text style={[styles.modeTx, { color: p.text }]}>Encode / Encrypt</Text>
+              <FontAwesome name={encodeMenuOpen ? "caret-up" : "caret-down"} size={12} color={p.tabIconDefault} />
+            </View>
           </Pressable>
-        ))}
-      </ScrollView>
+          {encodeMenuOpen ? (
+            <View
+              style={[
+                styles.modeDropdown,
+                {
+                  borderColor: TacticalPalette.border,
+                  backgroundColor: TacticalPalette.elevated,
+                  ...(Platform.OS === "web"
+                    ? ({ boxShadow: "0 16px 40px rgba(0,0,0,0.5)" } as const)
+                    : { elevation: 14 }),
+                },
+              ]}>
+              <Text style={[styles.modeDropdownIntro, { color: p.tabIconDefault }]}>
+                Least → most secure (approx.)
+              </Text>
+              <ScrollView style={styles.modeDropdownScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+                {ENCODE_OPERATIONS.map((item) => {
+                  const sel = tab === item.tab && mode === "encode";
+                  return (
+                    <Pressable
+                      key={item.tab}
+                      onPress={() => pickEncode(item.tab)}
+                      style={[
+                        styles.modeDropdownRow,
+                        { borderBottomColor: TacticalPalette.border },
+                        sel && { backgroundColor: TacticalPalette.panel },
+                      ]}
+                      accessibilityRole="menuitem">
+                      <Text style={[styles.modeRank, { color: p.tabIconDefault }]}>{item.rank}.</Text>
+                      <View style={styles.modeDropdownTextCol}>
+                        <Text style={[styles.modeDropdownTitle, { color: p.text }]}>{item.title}</Text>
+                        <Text style={[styles.modeDropdownSub, { color: p.tabIconDefault }]}>{item.subtitle}</Text>
+                      </View>
+                      {sel ? <FontAwesome name="check" size={14} color={p.tint} /> : null}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          ) : null}
+        </View>
 
-      <View style={[styles.modeRow, { borderBottomColor: TacticalPalette.border }]}>
+        <View style={styles.modeAnchor}>
+          <Pressable
+            onPress={() => {
+              setEncodeMenuOpen(false);
+              setDecodeMenuOpen((v) => !v);
+            }}
+            style={[
+              styles.modeBtn,
+              mode === "decode" && { borderColor: p.tint, backgroundColor: TacticalPalette.panel },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Decode or decrypt — choose method"
+            accessibilityState={{ expanded: decodeMenuOpen, selected: mode === "decode" }}>
+            <View style={styles.modeBtnInner}>
+              <Text style={[styles.modeTx, { color: p.text }]}>Decode / Decrypt</Text>
+              <FontAwesome name={decodeMenuOpen ? "caret-up" : "caret-down"} size={12} color={p.tabIconDefault} />
+            </View>
+          </Pressable>
+          {decodeMenuOpen ? (
+            <View
+              style={[
+                styles.modeDropdown,
+                {
+                  borderColor: TacticalPalette.border,
+                  backgroundColor: TacticalPalette.elevated,
+                  ...(Platform.OS === "web"
+                    ? ({ boxShadow: "0 16px 40px rgba(0,0,0,0.5)" } as const)
+                    : { elevation: 14 }),
+                },
+              ]}>
+              <Text style={[styles.modeDropdownIntro, { color: p.tabIconDefault }]}>
+                Least → most secure (approx.)
+              </Text>
+              <ScrollView style={styles.modeDropdownScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+                {DECODE_OPERATIONS.map((item) => {
+                  const sel = tab === item.tab && mode === "decode";
+                  return (
+                    <Pressable
+                      key={item.tab}
+                      onPress={() => pickDecode(item.tab)}
+                      style={[
+                        styles.modeDropdownRow,
+                        { borderBottomColor: TacticalPalette.border },
+                        sel && { backgroundColor: TacticalPalette.panel },
+                      ]}
+                      accessibilityRole="menuitem">
+                      <Text style={[styles.modeRank, { color: p.tabIconDefault }]}>{item.rank}.</Text>
+                      <View style={styles.modeDropdownTextCol}>
+                        <Text style={[styles.modeDropdownTitle, { color: p.text }]}>{item.title}</Text>
+                        <Text style={[styles.modeDropdownSub, { color: p.tabIconDefault }]}>{item.subtitle}</Text>
+                      </View>
+                      {sel ? <FontAwesome name="check" size={14} color={p.tint} /> : null}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              <Text style={[styles.modeDropdownFoot, { color: p.tabIconDefault }]}>
+                Compressor & OTP: use Encode menu only.
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
         <Pressable
-          onPress={() => setMode("encode")}
+          onPress={() => {
+            closeModeMenus();
+            if (methodReferenceOpen) {
+              setMethodReferenceOpen(false);
+            } else {
+              setMethodReferenceOpen(true);
+              setGuideOpen(false);
+            }
+          }}
           style={[
-            styles.modeBtn,
-            mode === "encode" && { borderColor: p.tint, backgroundColor: TacticalPalette.panel },
-          ]}>
-          <Text style={[styles.modeTx, { color: p.text }]}>Encode / Encrypt</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => setMode("decode")}
-          style={[
-            styles.modeBtn,
-            mode === "decode" && { borderColor: p.tint, backgroundColor: TacticalPalette.panel },
-          ]}>
-          <Text style={[styles.modeTx, { color: p.text }]}>Decode / Decrypt</Text>
+            styles.guideToggle,
+            { borderColor: methodReferenceOpen ? p.tint : p.tabIconDefault },
+          ]}
+          accessibilityLabel={methodReferenceOpen ? "Close method reference" : "Open method reference"}>
+          <Text
+            style={[styles.guideToggleTx, { color: methodReferenceOpen ? p.tint : p.tabIconDefault }]}>
+            {methodReferenceOpen ? "Tool" : "Reference"}
+          </Text>
         </Pressable>
 
         <Pressable
-          onPress={() => setGuideOpen((v) => !v)}
-          style={[styles.guideToggle, { borderColor: p.tabIconDefault }]}>
-          <Text style={[styles.guideToggleTx, { color: p.tabIconDefault }]}>{guideOpen ? "Hide guide" : "Quick guide"}</Text>
+          onPress={() => {
+            closeModeMenus();
+            if (methodReferenceOpen) setMethodReferenceOpen(false);
+            setGuideOpen((v) => !v);
+          }}
+          style={[
+            styles.guideToggle,
+            { borderColor: guideOpen ? p.tint : p.tabIconDefault },
+          ]}
+          accessibilityLabel={guideOpen ? "Hide quick guide" : "Show quick guide"}>
+          <Text
+            style={[styles.guideToggleTx, { color: guideOpen ? p.tint : p.tabIconDefault }]}>
+            {guideOpen ? "Hide guide" : "Quick guide"}
+          </Text>
         </Pressable>
       </View>
 
-      <View style={[paneStyle, { minHeight: clamp(height - 200, 420, 9999) }]}>
-        <View style={[opPaneStyle, { borderRightColor: TacticalPalette.border, borderBottomColor: TacticalPalette.border }]}>
-          {tab === "aes" ? <AesPane mode={mode} /> : null}
-          {tab === "whisper" ? <WhisperPane mode={mode} /> : null}
-          {tab === "otp" ? <OtpPane /> : null}
-          {tab === "compressor" ? <CompressorPane /> : null}
-          {tab === "stego" ? <StegoPane mode={mode} /> : null}
-          {tab === "legacy" ? <LegacyPane mode={mode} /> : null}
-        </View>
-
-        {guideOpen ? (
-          <View style={guidePaneStyle}>
-            <View style={[styles.guideHead, { borderBottomColor: TacticalPalette.border }]}>
-              <Text style={[styles.guideTitle, { color: p.text }]}>{guide.title}</Text>
+      <View style={styles.mainWorkspace}>
+        {methodReferenceOpen ? (
+          <MethodsAtAGlancePanel
+            textColor={p.text}
+            mutedColor={p.tabIconDefault}
+            borderColor={TacticalPalette.border}
+            tint={p.tint}
+            onTintLabel={onTintLabel}
+            onClose={() => setMethodReferenceOpen(false)}
+          />
+        ) : (
+          <View style={[paneStyle, styles.workspacePane]}>
+            <View
+              style={[
+                opPaneStyle,
+                {
+                  borderRightColor: TacticalPalette.border,
+                  borderBottomColor: TacticalPalette.border,
+                  minHeight: 0,
+                },
+              ]}>
+              {tab === "aes" ? <AesPane mode={mode} /> : null}
+              {tab === "whisper" ? <WhisperPane mode={mode} /> : null}
+              {tab === "otp" ? <OtpPane /> : null}
+              {tab === "compressor" ? <CompressorPane /> : null}
+              {tab === "stego" ? <StegoPane mode={mode} /> : null}
+              {tab === "legacy" ? <LegacyPane mode={mode} /> : null}
             </View>
-            <ScrollView contentContainerStyle={styles.guideBody}>
-              <Text style={[styles.guideText, { color: p.tabIconDefault }]}>{guide.body}</Text>
-            </ScrollView>
+
+            {guideOpen ? (
+              <View style={[guidePaneStyle, desktopSplit ? null : { minHeight: 0 }]}>
+                <View style={[styles.guideHead, { borderBottomColor: TacticalPalette.border }]}>
+                  <Text style={[styles.guideTitle, { color: p.text }]}>{guide.title}</Text>
+                </View>
+                <ScrollView contentContainerStyle={styles.guideBody}>
+                  <Text style={[styles.guideText, { color: p.tabIconDefault }]}>{guide.body}</Text>
+                </ScrollView>
+              </View>
+            ) : null}
           </View>
-        ) : null}
+        )}
       </View>
     </View>
   );
@@ -1065,7 +1389,7 @@ function LegacyPane({ mode }: { mode: Mode }) {
         );
       }
     } catch (e) {
-      Alert.alert("Signals", e instanceof Error ? e.message : "Failed");
+      Alert.alert("Ciphers", e instanceof Error ? e.message : "Failed");
     }
   };
 
@@ -1130,25 +1454,124 @@ function LegacyPane({ mode }: { mode: Mode }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  head: { padding: 14, borderBottomWidth: StyleSheet.hairlineWidth },
+  screen: { flex: 1, position: "relative" as const },
+  modeMenuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+    backgroundColor: "transparent",
+  },
+  modeMenuBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    zIndex: 3,
+    position: "relative" as const,
+  },
+  modeAnchor: {
+    flex: 1,
+    minWidth: 0,
+    position: "relative" as const,
+    zIndex: 4,
+  },
+  modeBtnInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  modeDropdown: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    marginTop: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    maxHeight: 360,
+    overflow: "hidden",
+  },
+  modeDropdownIntro: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.55,
+    textTransform: "uppercase",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  modeDropdownScroll: { maxHeight: 268 },
+  modeDropdownRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  modeRank: { fontSize: 12, fontWeight: "900", width: 24 },
+  modeDropdownTextCol: { flex: 1, minWidth: 0 },
+  modeDropdownTitle: { fontSize: 14, fontWeight: "800" },
+  modeDropdownSub: { fontSize: 11, lineHeight: 15, marginTop: 3 },
+  modeDropdownFoot: {
+    fontSize: 10,
+    lineHeight: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontStyle: "italic",
+  },
+  head: { padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, zIndex: 2 },
   h1: { fontSize: 22, fontWeight: "800" },
   sub: { marginTop: 4, fontSize: 12, lineHeight: 16 },
-  tabRow: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
-  tabChip: { flexDirection: "row", alignItems: "center", gap: 8, borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
-  tabChipTx: { fontSize: 13, fontWeight: "700" },
-  modeRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },
-  modeBtn: { flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 12, alignItems: "center", borderColor: TacticalPalette.border },
+  mainWorkspace: { flex: 1, minHeight: 0 },
+  workspacePane: { flex: 1, minHeight: 0, zIndex: 0 },
+  methodsAtAGlanceWrap: {
+    flex: 1,
+    minHeight: 0,
+    position: "relative" as const,
+  },
+  methodsAtAGlanceScroll: { flex: 1 },
+  methodsAtAGlanceContent: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14 },
+  methodsAtAGlanceHead: { fontSize: 13, fontWeight: "800", marginBottom: 4 },
+  methodsAtAGlanceSub: { fontSize: 11, lineHeight: 15, marginBottom: 10 },
+  methodBlurbBlock: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+  },
+  methodBlurbTitle: { fontSize: 15, fontWeight: "800", marginBottom: 8 },
+  methodBlurbLead: { fontSize: 11, fontWeight: "800", letterSpacing: 0.35, marginBottom: 3 },
+  methodBlurbBody: { fontSize: 12, lineHeight: 18 },
+  modeBtn: {
+    width: "100%",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    borderColor: TacticalPalette.border,
+  },
   modeTx: { fontWeight: "800" },
   guideToggle: { borderWidth: 1, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12 },
   guideToggleTx: { fontWeight: "800", fontSize: 12 },
 
-  splitRow: { flex: 1, flexDirection: "row" },
-  splitCol: { flex: 1, flexDirection: "column" },
-  leftPane: { flex: 1, borderRightWidth: StyleSheet.hairlineWidth },
-  rightPane: { width: 420, maxWidth: "40%", borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: TacticalPalette.border },
-  topPane: { flex: 1, borderBottomWidth: StyleSheet.hairlineWidth },
-  bottomPane: { flex: 1 },
+  splitRow: { flex: 1, flexDirection: "row", minHeight: 0 },
+  splitCol: { flex: 1, flexDirection: "column", minHeight: 0 },
+  leftPane: { flex: 1, minHeight: 0, borderRightWidth: StyleSheet.hairlineWidth },
+  rightPane: {
+    width: 420,
+    maxWidth: "40%",
+    minHeight: 0,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: TacticalPalette.border,
+  },
+  topPane: { flex: 1, minHeight: 0, borderBottomWidth: StyleSheet.hairlineWidth },
+  bottomPane: { flex: 1, minHeight: 0 },
 
   guideHead: { padding: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   guideTitle: { fontSize: 14, fontWeight: "800" },

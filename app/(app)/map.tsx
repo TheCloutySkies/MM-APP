@@ -27,8 +27,8 @@ import {
     type MapPolylineOverlay,
 } from "@/components/map/TacticalMap";
 import type { MapBaseLayerId, MapPointerMode, MapUserLocation } from "@/components/map/mapTypes";
-import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
+import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { geocodeSearch } from "@/lib/geocode";
 import {
@@ -64,52 +64,78 @@ function clamp(n: number, a: number, b: number) {
 
 function CoordWidget(props: {
   tint: string;
-  onTintLabel: string;
   border: string;
   text: string;
   textMuted: string;
+  surface: string;
   label: string;
   fmt: "latlng" | "mgrs";
   onToggleFmt: () => void;
+  /** Y coordinate (from screen top) for first placement — bottom of map search HUD + gap. */
+  stackBelowHudY: number;
 }) {
   const { width: winW, height: winH } = useWindowDimensions();
-  const start = useRef({ x: 16, y: 96, w: 230, h: 92 });
-  const [pos, setPos] = useState(start.current);
+  const posRef = useRef({ x: 12, y: 120, w: 230, h: 92 });
+  const dragOrigin = useRef({ x: 0, y: 0 });
+  const resizeOrigin = useRef({ x: 0, y: 0, w: 0, h: 0 });
+  const [pos, setPos] = useState(() => ({ ...posRef.current }));
   const [min, setMin] = useState(false);
+  const positionedRef = useRef(false);
+
+  /** One-time placement under the HUD, right-aligned — avoids overlap with search / layers. */
+  useEffect(() => {
+    if (positionedRef.current || winW < 48) return;
+    positionedRef.current = true;
+    const w = posRef.current.w;
+    const h = posRef.current.h;
+    const top = Math.max(props.stackBelowHudY, 12);
+    const x = clamp(winW - w - 12, 8, Math.max(8, winW - w - 8));
+    const y = clamp(top, 8, Math.max(8, winH - h - 8));
+    posRef.current = { ...posRef.current, x, y, w, h };
+    setPos({ ...posRef.current });
+  }, [winW, winH, props.stackBelowHudY]);
+
+  useEffect(() => {
+    posRef.current = pos;
+  }, [pos]);
 
   const drag = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponder: () => !min,
+        onMoveShouldSetPanResponder: (_, g) =>
+          !min && (Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2),
         onPanResponderGrant: () => {
-          start.current = pos;
+          dragOrigin.current = { x: posRef.current.x, y: posRef.current.y };
         },
         onPanResponderMove: (_, g) => {
           if (min) return;
-          const nx = clamp(start.current.x + g.dx, 6, Math.max(6, winW - pos.w - 6));
-          const ny = clamp(start.current.y + g.dy, 6, Math.max(6, winH - pos.h - 6));
-          setPos((p) => ({ ...p, x: nx, y: ny }));
+          const p = posRef.current;
+          const nx = clamp(dragOrigin.current.x + g.dx, 6, Math.max(6, winW - p.w - 6));
+          const ny = clamp(dragOrigin.current.y + g.dy, 6, Math.max(6, winH - p.h - 6));
+          setPos((prev) => ({ ...prev, x: nx, y: ny }));
         },
       }),
-    [pos, winW, winH, min],
+    [winW, winH, min],
   );
 
   const resizeSE = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 1 || Math.abs(g.dy) > 1,
         onPanResponderGrant: () => {
-          start.current = pos;
+          const p = posRef.current;
+          resizeOrigin.current = { x: p.x, y: p.y, w: p.w, h: p.h };
         },
         onPanResponderMove: (_, g) => {
-          const nw = clamp(start.current.w + g.dx, 190, Math.min(420, winW - start.current.x - 6));
-          const nh = clamp(start.current.h + g.dy, 72, Math.min(220, winH - start.current.y - 6));
-          setPos((p) => ({ ...p, w: nw, h: nh }));
+          const o = resizeOrigin.current;
+          const nw = clamp(o.w + g.dx, 190, Math.min(420, winW - o.x - 6));
+          const nh = clamp(o.h + g.dy, 72, Math.min(220, winH - o.y - 6));
+          setPos((prev) => ({ ...prev, w: nw, h: nh }));
         },
       }),
-    [pos, winW, winH],
+    [winW, winH],
   );
 
   return (
@@ -119,26 +145,34 @@ function CoordWidget(props: {
         {
           left: pos.x,
           top: pos.y,
-          width: min ? 170 : pos.w,
+          width: min ? 200 : pos.w,
           height: min ? 44 : pos.h,
           borderColor: props.border,
-          backgroundColor: TacticalPalette.charcoal,
+          backgroundColor: props.surface,
+          zIndex: 1100,
+          elevation: 14,
         },
-      ]}>
+      ]}
+    >
       <View {...drag.panHandlers} style={styles.coordHead}>
         <Text style={[styles.coordTitle, { color: props.textMuted }]}>Crosshair</Text>
         <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
           <Pressable onPress={props.onToggleFmt} style={styles.coordPill}>
-            <Text style={[styles.coordPillTx, { color: props.tint }]}>{props.fmt === "mgrs" ? "MGRS" : "Lat/Lng"}</Text>
+            <Text style={[styles.coordPillTx, { color: props.tint }]}>
+              {props.fmt === "mgrs" ? "MGRS" : "Lat/Lng"}
+            </Text>
           </Pressable>
-          <Pressable onPress={() => setMin((v) => !v)} style={styles.coordPill}>
-            <Text style={[styles.coordPillTx, { color: props.textMuted }]}>{min ? "▢" : "—"}</Text>
+          <Pressable
+            onPress={() => setMin((v) => !v)}
+            style={styles.coordPill}
+            accessibilityLabel={min ? "Expand coordinate panel" : "Minimize coordinate panel"}>
+            <FontAwesome name={min ? "chevron-up" : "chevron-down"} size={12} color={props.textMuted} />
           </Pressable>
         </View>
       </View>
       {!min ? (
         <View style={styles.coordBody}>
-          <Text style={[styles.coordVal, { color: props.text }]} numberOfLines={2}>
+          <Text style={[styles.coordVal, { color: props.text }]} numberOfLines={2} selectable>
             {props.label}
           </Text>
           <Text style={[styles.coordHint, { color: props.textMuted }]}>Drag header · resize corner</Text>
@@ -152,7 +186,9 @@ function CoordWidget(props: {
 export default function MapScreen() {
   const router = useRouter();
   const scheme = useColorScheme() ?? "light";
-  const p = Colors[scheme];
+  const chrome = useTacticalChrome();
+  const visualTheme = useMMStore((s) => s.visualTheme);
+  const mapNightDimPercent = useMMStore((s) => s.mapNightDimPercent);
   const { height: windowH, width: windowW } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const supabase = useMMStore((s) => s.supabase);
@@ -163,8 +199,8 @@ export default function MapScreen() {
   const mainKey = useMMStore((s) => s.mainVaultKey);
   const decoyKey = useMMStore((s) => s.decoyVaultKey);
 
-  /** Dark theme uses white tint — label on solid tint must be dark for contrast. */
-  const onTintLabel = scheme === "dark" ? "#0f172a" : "#ffffff";
+  /** Label on solid tint buttons — crimson (Night Ops) needs light text; woodland dark uses dark on green. */
+  const onTintLabel = visualTheme === "nightops" ? "#ffffff" : scheme === "dark" ? "#0f172a" : "#ffffff";
 
   const mapKey = useMemo(() => {
     try {
@@ -212,7 +248,11 @@ export default function MapScreen() {
   const dockToolsRight = Platform.OS === "web" && desktopMode && windowW >= DESKTOP_MAP_TOOLS_DOCK_MIN_W;
   const compactToolChips = !dockToolsRight && windowW < 600;
 
-  const maxSheetH = Math.min(480, windowH * 0.58);
+  /** Taller cap on web mobile PWA so the bottom sheet behaves like a locked panel. */
+  const maxSheetH = Math.min(
+    520,
+    windowH * (dockToolsRight ? 0.58 : Platform.OS === "web" ? 0.88 : 0.58),
+  );
   const expandedHeightRef = useRef(Math.min(336, maxSheetH * 0.88));
   const [sheetH, setSheetH] = useState(MIN_SHEET_H);
   const [sheetOffsetX, setSheetOffsetX] = useState(0);
@@ -654,7 +694,7 @@ export default function MapScreen() {
       return {
         id: "__mm_draft_line__",
         coordinates: pathDraft.map((x) => ({ latitude: x.lat, longitude: x.lng })),
-        color: TacticalPalette.boneMuted,
+        color: chrome.textMuted,
         title: "Route draft",
         lineDash: "7 5",
       };
@@ -663,13 +703,13 @@ export default function MapScreen() {
       return {
         id: "__mm_draft_line2__",
         coordinates: pathDraft.map((x) => ({ latitude: x.lat, longitude: x.lng })),
-        color: TacticalPalette.boneMuted,
+        color: chrome.textMuted,
         title: "Zone draft",
         lineDash: "7 5",
       };
     }
     return null;
-  }, [drawTool, pathDraft, scheme]);
+  }, [drawTool, pathDraft, chrome.textMuted]);
 
   const draftPolyPreview = useMemo((): MapPolygonOverlay | null => {
     if (drawTool !== "zone" || pathDraft.length < 3) return null;
@@ -682,11 +722,11 @@ export default function MapScreen() {
     return {
       id: "__mm_draft_poly__",
       coordinates: ring,
-      strokeColor: TacticalPalette.boneMuted,
+      strokeColor: chrome.textMuted,
       fillColor: "rgba(139,115,85,0.22)",
       title: "Zone draft",
     };
-  }, [drawTool, pathDraft, scheme]);
+  }, [drawTool, pathDraft, chrome.textMuted]);
 
   const mapPolylines = useMemo(() => {
     const list = [...tacticalPolylines, ...(showIntel ? supermapPolylines : [])];
@@ -769,7 +809,19 @@ export default function MapScreen() {
 
   const ChipStrip = ({ children }: { children: ReactNode }) =>
     compactToolChips ? (
-      <View style={styles.chipRowWrap}>{children}</View>
+      Platform.OS === "web" ? (
+        <ScrollView
+          horizontal
+          keyboardShouldPersistTaps="handled"
+          showsHorizontalScrollIndicator={false}
+          style={styles.chipStripWebMobile}
+          contentContainerStyle={styles.chipStripWebMobileInner}
+        >
+          {children}
+        </ScrollView>
+      ) : (
+        <View style={styles.chipRowWrap}>{children}</View>
+      )
     ) : (
       <ScrollView
         horizontal
@@ -801,6 +853,9 @@ export default function MapScreen() {
         ? mgrsLabel
         : `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
 
+  const mapHudPadTop = Math.max(10, insets.top + 8);
+  const coordStackBelowHud = mapHudPadTop + 54 + 10;
+
   const mapNode = (
     <View style={{ flex: 1, minHeight: 0 }}>
       <TacticalMap
@@ -814,100 +869,145 @@ export default function MapScreen() {
         userLocation={userLoc}
         pointerMode={mapPointerMode}
         onCenterChange={(lat, lng, zoom) => setCenter({ lat, lng, zoom })}
+        mapDimPercent={visualTheme === "nightops" ? mapNightDimPercent : 0}
       />
       {/* Crosshair */}
       <View pointerEvents="none" style={styles.crosshairWrap}>
-        <View style={[styles.crosshairDot, { borderColor: p.tint }]} />
-        <View style={[styles.crosshairLineH, { backgroundColor: p.tint }]} />
-        <View style={[styles.crosshairLineV, { backgroundColor: p.tint }]} />
+        <View style={[styles.crosshairDot, { borderColor: chrome.tint }]} />
+        <View style={[styles.crosshairLineH, { backgroundColor: chrome.tint }]} />
+        <View style={[styles.crosshairLineV, { backgroundColor: chrome.tint }]} />
       </View>
 
-      {/* HUD: floating search + layers */}
-      <View style={[styles.hudTop, { paddingTop: Math.max(10, insets.top + 8) }]}>
-        <View style={[styles.hudRow, { backgroundColor: TacticalPalette.charcoal, borderColor: TacticalPalette.border }]}>
-          <Pressable
-            onPress={() => setHudSearchOpen((v) => !v)}
-            style={styles.hudIconBtn}
-            accessibilityRole="button"
-            accessibilityLabel={hudSearchOpen ? "Minimize search" : "Open search"}>
-            <FontAwesome name={hudSearchOpen ? "chevron-up" : "search"} size={16} color={p.tabIconDefault} />
-          </Pressable>
-          {hudSearchOpen ? (
-            <>
-              <TextInput
-                value={hudQuery}
-                onChangeText={setHudQuery}
-                placeholder="Search place, grid, POI…"
-                placeholderTextColor="#888"
-                onSubmitEditing={() => void runHudSearch()}
-                style={[styles.hudInput, { color: p.text, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
-                returnKeyType="search"
-              />
-              <Pressable
-                onPress={() => void runHudSearch()}
-                style={[styles.hudGoBtn, { backgroundColor: p.tint, opacity: hudSearching ? 0.6 : 1 }]}
-                disabled={hudSearching}>
-                <Text style={[styles.hudGoTx, { color: onTintLabel }]}>{hudSearching ? "…" : "Go"}</Text>
-              </Pressable>
-            </>
-          ) : (
-            <Text style={[styles.hudMiniLabel, { color: p.tabIconDefault }]}>Search</Text>
-          )}
+      {layersOpen ? (
+        <Pressable
+          accessibilityLabel="Close layers menu"
+          onPress={() => setLayersOpen(false)}
+          style={[StyleSheet.absoluteFillObject, styles.hudLayersBackdrop]}
+        />
+      ) : null}
+
+      {/* HUD: full-width search + layers menu anchored to the layers button (opens downward). */}
+      <View
+        style={[styles.hudTop, { paddingTop: mapHudPadTop, zIndex: 1050 }]}
+        pointerEvents="box-none">
+        <View style={styles.hudTopRow} pointerEvents="box-none">
+          <View
+            style={[
+              styles.hudSearchCard,
+              { backgroundColor: chrome.surface, borderColor: chrome.border },
+            ]}>
             <Pressable
-              onPress={() => setLayersOpen((v) => !v)}
+              onPress={() => setHudSearchOpen((v) => !v)}
               style={styles.hudIconBtn}
               accessibilityRole="button"
-              accessibilityLabel="Layers">
-              <FontAwesome name="th-large" size={16} color={p.tabIconDefault} />
+              accessibilityLabel={hudSearchOpen ? "Minimize search" : "Open search"}>
+              <FontAwesome name={hudSearchOpen ? "chevron-up" : "search"} size={16} color={chrome.tabIconDefault} />
             </Pressable>
-        </View>
-
-        {layersOpen ? (
-          <View style={[styles.layersPanel, { borderColor: TacticalPalette.border, backgroundColor: TacticalPalette.elevated }]}>
-            <Text style={[styles.layersTitle, { color: p.text }]}>Layers</Text>
-            <View style={styles.layersRow}>
-              {[
-                ["osm_dark", "OSM Dark"],
-                ["osm", "OSM"],
-                ["topo", "Topo"],
-                ["satellite", "Sat"],
-              ].map(([id, label]) => (
-                <Pressable
-                  key={id}
-                  onPress={() => setBaseLayer(id as MapBaseLayerId)}
+            {hudSearchOpen ? (
+              <>
+                <TextInput
+                  value={hudQuery}
+                  onChangeText={setHudQuery}
+                  placeholder="Search place, grid, POI…"
+                  placeholderTextColor="#888"
+                  onSubmitEditing={() => void runHudSearch()}
                   style={[
-                    styles.layerChip,
-                    {
-                      borderColor: baseLayer === id ? p.tint : TacticalPalette.border,
-                      backgroundColor: baseLayer === id ? TacticalPalette.panel : "transparent",
-                    },
-                  ]}>
-                  <Text style={[styles.layerChipTx, { color: p.text }]}>{label}</Text>
+                    styles.hudInput,
+                    { color: chrome.text, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+                  ]}
+                  returnKeyType="search"
+                />
+                <Pressable
+                  onPress={() => void runHudSearch()}
+                  style={[styles.hudGoBtn, { backgroundColor: chrome.tint, opacity: hudSearching ? 0.6 : 1 }]}
+                  disabled={hudSearching}>
+                  <Text style={[styles.hudGoTx, { color: onTintLabel }]}>
+                    {hudSearching ? "…" : "Go"}
+                  </Text>
                 </Pressable>
-              ))}
-            </View>
-            <Text style={[styles.layersHint, { color: p.tabIconDefault }]}>
-              Tip: keep Intel off unless you need OSINT overlays.
-            </Text>
+              </>
+            ) : (
+              <Text style={[styles.hudMiniLabel, { color: chrome.tabIconDefault }]}>Search</Text>
+            )}
           </View>
-        ) : null}
+
+          <View style={styles.hudLayersAnchor} collapsable={false}>
+            <Pressable
+              onPress={() => setLayersOpen((v) => !v)}
+              style={[
+                styles.hudLayersFab,
+                {
+                  backgroundColor: chrome.surface,
+                  borderColor: layersOpen ? chrome.tint : chrome.border,
+                },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Layers"
+              accessibilityState={{ expanded: layersOpen }}>
+              <FontAwesome name="th-large" size={18} color={chrome.tabIconDefault} />
+            </Pressable>
+
+            {layersOpen ? (
+              <View
+                style={[
+                  styles.layersDropdown,
+                  { borderColor: chrome.border, backgroundColor: chrome.elevated },
+                ]}
+                accessibilityRole="menu">
+                <Text style={[styles.layersTitle, { color: chrome.text }]}>Layers</Text>
+                <View style={styles.layersRow}>
+                  {(
+                    [
+                      ["osm_dark", "OSM Dark"],
+                      ["osm", "OSM"],
+                      ["topo", "Topo"],
+                      ["satellite", "Sat"],
+                      ["hybrid", "Hybrid"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <Pressable
+                      key={id}
+                      accessibilityRole="menuitem"
+                      onPress={() => {
+                        setBaseLayer(id);
+                        setLayersOpen(false);
+                      }}
+                      style={[
+                        styles.layerChip,
+                        {
+                          borderColor: baseLayer === id ? chrome.tint : chrome.border,
+                          backgroundColor: baseLayer === id ? chrome.panel : "transparent",
+                        },
+                      ]}>
+                      <Text style={[styles.layerChipTx, { color: chrome.text }]}>{label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Text style={[styles.layersHint, { color: chrome.tabIconDefault }]}>
+                  Tip: keep Intel off unless you need OSINT overlays.
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
       </View>
 
       {/* Draggable coordinate widget */}
       <CoordWidget
-        onTintLabel={onTintLabel}
-        tint={p.tint}
-        border={TacticalPalette.border}
-        text={p.text}
-        textMuted={p.tabIconDefault}
+        tint={chrome.tint}
+        border={chrome.border}
+        surface={chrome.surface}
+        text={chrome.text}
+        textMuted={chrome.tabIconDefault}
         label={centerLabel}
         fmt={centerFmt}
         onToggleFmt={() => setCenterFmt((v) => (v === "latlng" ? "mgrs" : "latlng"))}
+        stackBelowHudY={coordStackBelowHud}
       />
 
       {loading ? (
         <View style={styles.loader}>
-          <ActivityIndicator color={p.tint} size="large" />
+          <ActivityIndicator color={chrome.tint} size="large" />
         </View>
       ) : null}
     </View>
@@ -915,7 +1015,7 @@ export default function MapScreen() {
 
   const mapToolsInner = (
     <>
-            <Text style={[styles.mapToolsIntro, { color: p.tabIconDefault }]}>
+            <Text style={[styles.mapToolsIntro, { color: chrome.tabIconDefault }]}>
               Team pins & zones sync for everyone with the same unit key. Use Share live so others see your position
               (updates ~20s). Turn on Intel overlay to add Overpass / OSINT on top.
             </Text>
@@ -924,12 +1024,12 @@ export default function MapScreen() {
               onPress={() => router.push("/(app)/map-exports")}
               style={({ pressed }) => [
                 styles.mapAuxLink,
-                { borderColor: p.tint, opacity: pressed ? 0.88 : 1 },
+                { borderColor: chrome.tint, opacity: pressed ? 0.88 : 1 },
               ]}>
-              <Text style={[styles.mapAuxLinkTx, { color: p.tint }]}>
+              <Text style={[styles.mapAuxLinkTx, { color: chrome.tint }]}>
                 Team GPX library — open in Gaia, Garmin, QGIS…
               </Text>
-              <Text style={[styles.mapAuxLinkSub, { color: p.tabIconDefault }]}>
+              <Text style={[styles.mapAuxLinkSub, { color: chrome.tabIconDefault }]}>
                 Publish plaintext snapshots everyone can download
               </Text>
             </Pressable>
@@ -938,23 +1038,23 @@ export default function MapScreen() {
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderColor: chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => void useGpsCenter()}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>GPS drop</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>GPS drop</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderColor: chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => setShowIntel((v) => !v)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>
                   Intel {showIntel ? "on" : "off"}
                 </Text>
               </Pressable>
@@ -963,7 +1063,7 @@ export default function MapScreen() {
                   styles.chip,
                   {
                     borderWidth: shareTeamLocation ? 2 : 1,
-                    borderColor: shareTeamLocation ? TacticalPalette.accent : p.tabIconDefault,
+                    borderColor: shareTeamLocation ? chrome.accent : chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
@@ -974,7 +1074,7 @@ export default function MapScreen() {
                     return next;
                   });
                 }}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>
                   Share live {shareTeamLocation ? "on" : "off"}
                 </Text>
               </Pressable>
@@ -983,14 +1083,14 @@ export default function MapScreen() {
                   styles.chip,
                   {
                     borderWidth: baseLayer === "satellite" ? 2 : 1,
-                    borderColor: baseLayer === "satellite" ? TacticalPalette.accent : p.tabIconDefault,
+                    borderColor: baseLayer === "satellite" ? chrome.accent : chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() =>
                   setBaseLayer((b) => (b === "satellite" ? "osm_dark" : "satellite"))
                 }>
-                <Text style={[styles.chipLabel, { color: p.text }]}>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>
                   {baseLayer === "satellite" ? "Satellite" : "Basemap"}
                 </Text>
               </Pressable>
@@ -999,7 +1099,7 @@ export default function MapScreen() {
                   styles.chip,
                   {
                     borderWidth: pointDropMode ? 2 : 1,
-                    borderColor: pointDropMode ? p.tint : p.tabIconDefault,
+                    borderColor: pointDropMode ? chrome.tint : chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
@@ -1012,14 +1112,14 @@ export default function MapScreen() {
                     setPointDropMode(true);
                   }
                 }}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>
                   Pin drop {pointDropMode ? "ON" : "off"}
                 </Text>
               </Pressable>
             </ChipStrip>
 
-            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Tactical map</Text>
-            <Text style={[styles.drawHint, { color: p.tabIconDefault }]}>
+            <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Tactical map</Text>
+            <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>
               Long-press to drop a point. Pick a category — everyone sees who placed it. Route / zone: tap the map for
               corners, then Finish and categorize.
             </Text>
@@ -1029,41 +1129,41 @@ export default function MapScreen() {
                   styles.chip,
                   {
                     borderWidth: drawTool === "idle" ? 2 : 1,
-                    borderColor: drawTool === "idle" ? p.tint : p.tabIconDefault,
+                    borderColor: drawTool === "idle" ? chrome.tint : chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => setDrawMode("idle")}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Point</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Point</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
                     borderWidth: drawTool === "route" ? 2 : 1,
-                    borderColor: drawTool === "route" ? p.tint : p.tabIconDefault,
+                    borderColor: drawTool === "route" ? chrome.tint : chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => setDrawMode("route")}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Route</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Route</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
                     borderWidth: drawTool === "zone" ? 2 : 1,
-                    borderColor: drawTool === "zone" ? p.tint : p.tabIconDefault,
+                    borderColor: drawTool === "zone" ? chrome.tint : chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => setDrawMode("zone")}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Zone</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Zone</Text>
               </Pressable>
             </ChipStrip>
             {drawTool !== "idle" ? (
               <View style={styles.drawActions}>
-                <Text style={[styles.vertexCount, { color: p.text }]}>
+                <Text style={[styles.vertexCount, { color: chrome.text }]}>
                   Vertices: {pathDraft.length}
                   {drawTool === "route" ? " · min 2" : " · min 3"}
                 </Text>
@@ -1072,23 +1172,23 @@ export default function MapScreen() {
                     style={({ pressed }) => [
                       styles.drawSecondaryBtn,
                       {
-                        borderColor: p.tabIconDefault,
+                        borderColor: chrome.tabIconDefault,
                         opacity: pressed ? 0.85 : 1,
                       },
                     ]}
                     onPress={() => setPathDraft((d) => d.slice(0, -1))}>
-                    <Text style={[styles.drawSecondaryLabel, { color: p.text }]}>Undo</Text>
+                    <Text style={[styles.drawSecondaryLabel, { color: chrome.text }]}>Undo</Text>
                   </Pressable>
                   <Pressable
                     style={({ pressed }) => [
                       styles.drawSecondaryBtn,
                       {
-                        borderColor: p.tabIconDefault,
+                        borderColor: chrome.tabIconDefault,
                         opacity: pressed ? 0.85 : 1,
                       },
                     ]}
                     onPress={() => setPathDraft([])}>
-                    <Text style={[styles.drawSecondaryLabel, { color: p.text }]}>Clear</Text>
+                    <Text style={[styles.drawSecondaryLabel, { color: chrome.text }]}>Clear</Text>
                   </Pressable>
                   <Pressable
                     style={({ pressed }) => {
@@ -1098,7 +1198,7 @@ export default function MapScreen() {
                       return [
                         styles.drawFinishBtn,
                         {
-                          backgroundColor: p.tint,
+                          backgroundColor: chrome.tint,
                           opacity: dis ? 0.45 : pressed ? 0.9 : 1,
                         },
                       ];
@@ -1121,115 +1221,115 @@ export default function MapScreen() {
               style={({ pressed }) => [
                 styles.intelToolsToggle,
                 {
-                  borderColor: p.tint,
+                  borderColor: chrome.tint,
                   opacity: pressed ? 0.88 : 1,
                 },
               ]}>
-              <Text style={[styles.intelToolsToggleText, { color: p.tint }]}>
+              <Text style={[styles.intelToolsToggleText, { color: chrome.tint }]}>
                 {intelToolsOpen ? "▼ Hide Overpass & OSINT" : "▶ Show Overpass & OSINT"}
               </Text>
             </Pressable>
 
             {intelToolsOpen ? (
               <>
-                <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass quick (OSM)</Text>
+                <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Overpass quick (OSM)</Text>
                 <ChipStrip>
                   <Pressable
                     style={({ pressed }) => [
                       styles.chip,
                       {
-                        borderColor: p.tabIconDefault,
+                        borderColor: chrome.tabIconDefault,
                         backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                       },
                     ]}
                     onPress={() => void runIntel("water")}>
-                    <Text style={[styles.chipLabel, { color: p.text }]}>Water</Text>
+                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Water</Text>
                   </Pressable>
                   <Pressable
                     style={({ pressed }) => [
                       styles.chip,
                       {
-                        borderColor: p.tabIconDefault,
+                        borderColor: chrome.tabIconDefault,
                         backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                       },
                     ]}
                     onPress={() => void runIntel("power")}>
-                    <Text style={[styles.chipLabel, { color: p.text }]}>Power</Text>
+                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Power</Text>
                   </Pressable>
                   <Pressable
                     style={({ pressed }) => [
                       styles.chip,
                       {
-                        borderColor: p.tabIconDefault,
+                        borderColor: chrome.tabIconDefault,
                         backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                       },
                     ]}
                     onPress={() => void runIntel("emergency")}>
-                    <Text style={[styles.chipLabel, { color: p.text }]}>Emergency</Text>
+                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Emergency</Text>
                   </Pressable>
                 </ChipStrip>
 
-            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass · infrastructure presets</Text>
+            <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Overpass · infrastructure presets</Text>
             <ChipStrip>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderColor: chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.power_substations)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Substations</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Substations</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderColor: chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.medical)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Medical</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Medical</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderColor: chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.fuel)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Fuel</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Fuel</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderColor: chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.natural_water)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Waterfalls</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Waterfalls</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: p.tabIconDefault,
+                    borderColor: chrome.tabIconDefault,
                     backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
                   },
                 ]}
                 onPress={() => void runC4isrIntel(OVERPASS_C4ISR_PRESETS.comm_towers)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Comm towers</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Comm towers</Text>
               </Pressable>
             </ChipStrip>
 
-            <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>OSINT layers (SuperMap)</Text>
-            <Text style={[styles.drawHint, { color: p.tabIconDefault }]}>
+            <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>OSINT layers (SuperMap)</Text>
+            <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>
               Toggle sources, then load. Uses map centroid (first tactical pin or default Nevada). Power draws lines +
               substations; USGS and FIRMS are points.
             </Text>
@@ -1239,51 +1339,51 @@ export default function MapScreen() {
                   styles.chip,
                   {
                     borderWidth: osintPower ? 2 : 1,
-                    borderColor: osintPower ? TacticalPalette.accent : p.tabIconDefault,
-                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                    borderColor: osintPower ? chrome.accent : chrome.tabIconDefault,
+                    backgroundColor: pressed ? chrome.panel : "transparent",
                   },
                 ]}
                 onPress={() => setOsintPower((v) => !v)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Grid · power</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Grid · power</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
                     borderWidth: osintUsgs ? 2 : 1,
-                    borderColor: osintUsgs ? TacticalPalette.danger : p.tabIconDefault,
-                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                    borderColor: osintUsgs ? chrome.danger : chrome.tabIconDefault,
+                    backgroundColor: pressed ? chrome.panel : "transparent",
                   },
                 ]}
                 onPress={() => setOsintUsgs((v) => !v)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>USGS EQ</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>USGS EQ</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
                     borderWidth: osintFirms ? 2 : 1,
-                    borderColor: osintFirms ? TacticalPalette.coyote : p.tabIconDefault,
-                    backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                    borderColor: osintFirms ? chrome.tabIconDefault : chrome.tabIconDefault,
+                    backgroundColor: pressed ? chrome.panel : "transparent",
                   },
                 ]}
                 onPress={() => setOsintFirms((v) => !v)}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>NASA FIRMS</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>NASA FIRMS</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.chip,
                   {
-                    borderColor: TacticalPalette.accent,
-                    backgroundColor: pressed ? TacticalPalette.panel : TacticalPalette.elevated,
+                    borderColor: chrome.accent,
+                    backgroundColor: pressed ? chrome.panel : chrome.elevated,
                   },
                 ]}
                 onPress={() => void refreshSupermapLayers()}>
-                <Text style={[styles.chipLabel, { color: p.text }]}>Load OSINT</Text>
+                <Text style={[styles.chipLabel, { color: chrome.text }]}>Load OSINT</Text>
               </Pressable>
             </ChipStrip>
 
-        <Text style={[styles.fieldLabel, { color: p.tabIconDefault }]}>Overpass query</Text>
+        <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Overpass query</Text>
         <TextInput
           placeholder="Overpass QL — use __BBOX__ for bbox"
           placeholderTextColor="#888"
@@ -1292,7 +1392,7 @@ export default function MapScreen() {
           style={[
             styles.input,
             {
-              color: p.text,
+              color: chrome.text,
               borderColor: scheme === "dark" ? "#3f3f46" : "#d4d4d8",
               backgroundColor: scheme === "dark" ? "#09090b" : "#fafafa",
             },
@@ -1301,7 +1401,7 @@ export default function MapScreen() {
         <Pressable
           style={({ pressed }) => [
             styles.runBtn,
-            { backgroundColor: p.tint, opacity: pressed ? 0.9 : 1 },
+            { backgroundColor: chrome.tint, opacity: pressed ? 0.9 : 1 },
           ]}
           onPress={() => void runCustomIntel()}>
           <Text style={[styles.runBtnLabel, { color: onTintLabel }]}>Run query</Text>
@@ -1315,7 +1415,7 @@ export default function MapScreen() {
     <View
       style={[
         styles.screen,
-        { backgroundColor: p.background },
+        { backgroundColor: chrome.background },
         dockToolsRight && styles.screenDocked,
         Platform.OS === "web" ? { minHeight: "100%" as never } : null,
       ]}>
@@ -1337,7 +1437,7 @@ export default function MapScreen() {
             style={[
               styles.toolsDock,
               {
-                backgroundColor: p.background,
+                backgroundColor: chrome.background,
                 borderLeftColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
                 paddingTop: insets.top > 0 ? 8 : 0,
               },
@@ -1347,8 +1447,8 @@ export default function MapScreen() {
                 styles.toolsDockHead,
                 { borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
               ]}>
-              <Text style={[styles.panelTitle, { color: p.tabIconDefault }]}>Map tools</Text>
-              <Text style={[styles.toolsDockHint, { color: p.tabIconDefault }]}>
+              <Text style={[styles.panelTitle, { color: chrome.tabIconDefault }]}>Map tools</Text>
+              <Text style={[styles.toolsDockHint, { color: chrome.tabIconDefault }]}>
                 Desktop sidebar · turn off in Settings
               </Text>
             </View>
@@ -1371,9 +1471,11 @@ export default function MapScreen() {
               styles.sheet,
               {
                 height: sheetH,
-                backgroundColor: p.background,
+                backgroundColor: chrome.background,
                 borderTopColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
                 transform: [{ translateX: sheetOffsetX }],
+                paddingBottom: Platform.OS === "web" ? insets.bottom : 0,
+                maxHeight: Platform.OS === "web" ? windowH * 0.92 : undefined,
               },
             ]}>
             <View
@@ -1395,14 +1497,14 @@ export default function MapScreen() {
               <Pressable
                 style={styles.sheetTitleBtn}
                 onPress={() => (sheetExpanded ? setSheetH(MIN_SHEET_H) : expandSheet())}>
-                <Text style={[styles.panelTitle, { color: p.tabIconDefault }]}>Map tools</Text>
+                <Text style={[styles.panelTitle, { color: chrome.tabIconDefault }]}>Map tools</Text>
                 <FontAwesome
                   name={sheetExpanded ? "chevron-down" : "chevron-up"}
                   size={12}
-                  color={p.tabIconDefault}
+                  color={chrome.tabIconDefault}
                 />
               </Pressable>
-              <Text style={[styles.sheetDragHint, { color: p.tabIconDefault }]}>
+              <Text style={[styles.sheetDragHint, { color: chrome.tabIconDefault }]}>
                 {compactToolChips ? "Swipe up · chips wrap on phone" : "Drag up · side"}
               </Text>
             </View>
@@ -1477,6 +1579,19 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 4,
     marginHorizontal: -2,
+  },
+  /** Web PWA: horizontal chip rail instead of a wrapping grid beside the map. */
+  chipStripWebMobile: {
+    flexGrow: 0,
+    marginHorizontal: -14,
+  },
+  chipStripWebMobileInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    flexGrow: 0,
   },
   loader: {
     ...StyleSheet.absoluteFillObject,
@@ -1599,27 +1714,57 @@ const styles = StyleSheet.create({
     left: 10,
     right: 10,
     top: 0,
-    gap: 10,
     pointerEvents: "box-none",
   },
-  hudRow: {
+  hudTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    pointerEvents: "box-none",
+  },
+  hudSearchCard: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
     borderRadius: 12,
     overflow: "hidden",
   },
+  hudLayersAnchor: {
+    position: "relative",
+    flexShrink: 0,
+    zIndex: 1060,
+  },
+  hudLayersFab: {
+    borderWidth: 1,
+    borderRadius: 12,
+    width: 48,
+    height: 48,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hudLayersBackdrop: {
+    zIndex: 900,
+    backgroundColor: "transparent",
+  },
   hudIconBtn: { paddingHorizontal: 12, paddingVertical: 12 },
   hudInput: { flex: 1, paddingVertical: 10, paddingHorizontal: 10, fontSize: 14 },
   hudGoBtn: { paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10, marginRight: 10 },
   hudGoTx: { fontWeight: "900", fontSize: 13 },
   hudMiniLabel: { flex: 1, fontSize: 12, fontWeight: "800", paddingVertical: 12 },
-  layersPanel: {
-    borderWidth: 1,
+  layersDropdown: {
+    position: "absolute",
+    top: "100%",
+    right: 0,
+    marginTop: 8,
+    width: 268,
     borderRadius: 12,
+    borderWidth: 1,
     padding: 12,
-    maxWidth: 520,
-    alignSelf: "flex-start",
+    ...(Platform.OS === "web"
+      ? ({ boxShadow: "0 14px 34px rgba(0,0,0,0.55)" } as const)
+      : { elevation: 18 }),
   },
   layersTitle: { fontSize: 12, fontWeight: "900", marginBottom: 8, letterSpacing: 0.6, textTransform: "uppercase" },
   layersRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

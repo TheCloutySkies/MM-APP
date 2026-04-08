@@ -75,22 +75,22 @@ export const TacticalLight: TacticalColors = {
   success: TacticalPalette.success,
 };
 
-/** Pure black / deep red “night ops” chrome */
+/** Near-black + crimson cast — low emission, minimal visible signature (tactical “red light” UI). */
 export const TacticalNightOps: TacticalColors = {
-  background: "#000000",
-  surface: "#070707",
-  elevated: "#0f0f0f",
-  panel: "#141414",
-  text: "#f5e6e6",
-  textMuted: "#9a8585",
-  tint: "#9b2335",
-  tabIconDefault: "#7a5558",
-  tabIconSelected: "#ffb3bc",
-  border: "#2a1518",
-  borderLight: "#3d2026",
-  accent: "#c42d40",
-  danger: "#ff4d5e",
-  success: "#4a7c59",
+  background: "#020102",
+  surface: "#0c0406",
+  elevated: "#14080b",
+  panel: "#1a0c0f",
+  text: "#efd8dc",
+  textMuted: "#8a656a",
+  tint: "#d63d52",
+  tabIconDefault: "#9a5a62",
+  tabIconSelected: "#ffc4cc",
+  border: "#3d1820",
+  borderLight: "#52232c",
+  accent: "#e04556",
+  danger: "#ff6b7a",
+  success: "#3d6b4f",
 };
 
 export type VisualThemeId = "woodland" | "nightops";

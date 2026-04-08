@@ -1,5 +1,6 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
@@ -18,6 +19,16 @@ type Props = {
 export function DocumentDetailModal({ visible, title, subtitle, body, onClose }: Props) {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
+  const insets = useSafeAreaInsets();
+  const webInsetShell =
+    Platform.OS === "web"
+      ? ({
+          minHeight: "100dvh" as never,
+          width: "100%" as never,
+          maxWidth: "100vw" as never,
+          paddingTop: insets.top,
+        } as const)
+      : null;
 
   return (
     <Modal
@@ -25,7 +36,7 @@ export function DocumentDetailModal({ visible, title, subtitle, body, onClose }:
       animationType="slide"
       presentationStyle={Platform.OS === "ios" ? "pageSheet" : "fullScreen"}
       onRequestClose={onClose}>
-      <View style={[styles.shell, { backgroundColor: p.background }]}>
+      <View style={[styles.shell, { backgroundColor: p.background }, webInsetShell]}>
         <View style={[styles.head, { borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7" }]}>
           <Pressable onPress={onClose} hitSlop={14} style={styles.closeRow} accessibilityRole="button">
             <FontAwesome name="times" size={22} color={p.tint} />
@@ -34,7 +45,7 @@ export function DocumentDetailModal({ visible, title, subtitle, body, onClose }:
         </View>
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.scrollInner}
+          contentContainerStyle={[styles.scrollInner, { paddingBottom: Math.max(28, insets.bottom + 16) }]}
           keyboardShouldPersistTaps="handled">
           <Text style={[styles.title, { color: p.text }]} selectable>
             {title}

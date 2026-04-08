@@ -64,13 +64,29 @@ export const SK = {
   wrapMain: "mm_wrap_main",
   wrapDecoy: "mm_wrap_decoy",
   lastRealUnlock: "mm_last_real_unlock",
+  /** Tri-state layout: mobile | desktop | auto — native + redundant web cache under mm.ss.* */
+  layoutTri: "mm_layout_tri",
   desktopMode: "mm_desktop_mode",
   /** "grid" | "list" — vault file browser layout */
   vaultDriveViewMode: "mm_vault_drive_view",
   /** "woodland" | "nightops" — tactical chrome variant */
   visualTheme: "mm_visual_theme",
+  /** 0–100 — extra map darken veil in Night Ops (brightness / overlay). */
+  mapNightDimPercent: "mm_map_night_dim",
   /** JSON string[] — main tab route names (home, vault, …) */
   tabBarOrder: "mm_tab_bar_order",
+  /** Pixels — left rail width when desktop / war-room layout (web). */
+  tabRailWidthDesk: "mm_tab_rail_w_desk",
+  /** Pixels — bottom tab bar height (mobile / web compact). */
+  tabRailHeightMob: "mm_tab_rail_h_mob",
+  /** SHA-256 hex of primary PIN — calendar routing / offline verify (never plaintext PIN). */
+  primaryPinHash: "mm_primary_pin_hash",
+  /** SHA-256 hex of duress PIN. */
+  duressPinHash: "mm_duress_pin_hash",
+  /** Hex salt for calendar PBKDF2(primary). */
+  calendarSaltPrimary: "mm_cal_salt_pri",
+  /** Hex salt for calendar PBKDF2(duress). */
+  calendarSaltDuress: "mm_cal_salt_dur",
 } as const;
 
 /** Clear MM session tokens only (crypto setup on device preserved). */

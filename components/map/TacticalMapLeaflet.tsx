@@ -1,6 +1,6 @@
 import L from "leaflet";
 import { useEffect, useRef } from "react";
-import { StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 
 import type {
     MapBaseLayerId,
@@ -23,6 +23,8 @@ type Props = {
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
+  /** 0–100 Night Ops map darken — scales Leaflet container brightness. */
+  mapDimPercent?: number;
 };
 
 /** CDN assets so Metro never resolves leaflet/dist/images/*.png */
@@ -114,6 +116,18 @@ function makeSatelliteLayer() {
   );
 }
 
+/** Bing-style hybrid: imagery + reference labels / boundaries (Esri). */
+function makeHybridLabelsLayer() {
+  return L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    {
+      attribution: "Labels © Esri",
+      maxZoom: 19,
+      pane: "overlayPane",
+    },
+  );
+}
+
 function TacticalMapLeaflet({
   pins,
   polylines = [],
@@ -125,12 +139,14 @@ function TacticalMapLeaflet({
   userLocation,
   pointerMode = "default",
   onCenterChange,
+  mapDimPercent = 0,
 }: Props) {
   useLeafletAssets();
 
   const containerRef = useRef<View>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tileRef = useRef<L.TileLayer | null>(null);
+  const hybridLabelsRef = useRef<L.TileLayer | null>(null);
   const layerRef = useRef<L.LayerGroup | null>(null);
   const pinsRef = useRef(pins);
   pinsRef.current = pins;
@@ -146,6 +162,19 @@ function TacticalMapLeaflet({
   userLocRef.current = userLocation;
   const onCenterRef = useRef(onCenterChange);
   onCenterRef.current = onCenterChange;
+  const mapDimRef = useRef(mapDimPercent);
+  mapDimRef.current = mapDimPercent;
+
+  const applyMapDim = (map: L.Map, dimRaw: number) => {
+    const el = map.getContainer();
+    const dim = Math.max(0, Math.min(100, dimRaw));
+    if (dim <= 0) {
+      el.style.filter = "";
+      return;
+    }
+    const brightness = Math.max(0.12, 1 - (dim / 100) * 0.88);
+    el.style.filter = `brightness(${brightness})`;
+  };
 
   const paintAll = () => {
     const group = layerRef.current;
@@ -196,15 +225,34 @@ function TacticalMapLeaflet({
     const el = containerRef.current as unknown as HTMLElement | null;
     if (!el) return;
 
-    const map = L.map(el, { scrollWheelZoom: true }).setView([39.5, -120.2], 7);
+    const map = L.map(el, { scrollWheelZoom: true, zoomControl: false }).setView([39.5, -120.2], 7);
     mapRef.current = map;
+    L.control.zoom({ position: "bottomright" }).addTo(map);
 
-    const initial = baseLayer === "satellite" ? makeSatelliteLayer() : makeOsmLayer();
-    initial.addTo(map);
-    tileRef.current = initial;
+    if (baseLayer === "hybrid") {
+      const sat = makeSatelliteLayer();
+      sat.addTo(map);
+      const labels = makeHybridLabelsLayer();
+      labels.addTo(map);
+      tileRef.current = sat;
+      hybridLabelsRef.current = labels;
+    } else {
+      const initial =
+        baseLayer === "satellite"
+          ? makeSatelliteLayer()
+          : baseLayer === "topo"
+            ? makeTopoLayer()
+            : baseLayer === "osm_dark"
+              ? makeOsmDarkLayer()
+              : makeOsmLayer();
+      initial.addTo(map);
+      tileRef.current = initial;
+      hybridLabelsRef.current = null;
+    }
 
     layerRef.current = L.layerGroup().addTo(map);
     paintAll();
+    applyMapDim(map, mapDimRef.current);
 
     const onCtx = (e: L.LeafletMouseEvent) => {
       onLongPressRef.current?.(e.latlng.lat, e.latlng.lng);
@@ -238,6 +286,7 @@ function TacticalMapLeaflet({
       mapRef.current = null;
       layerRef.current = null;
       tileRef.current = null;
+      hybridLabelsRef.current = null;
     };
   }, []);
 
@@ -257,18 +306,32 @@ function TacticalMapLeaflet({
   useEffect(() => {
     const map = mapRef.current;
     const cur = tileRef.current;
+    const hy = hybridLabelsRef.current;
     if (!map || !cur) return;
     map.removeLayer(cur);
-    const next =
-      baseLayer === "satellite"
-        ? makeSatelliteLayer()
-        : baseLayer === "topo"
-          ? makeTopoLayer()
-          : baseLayer === "osm_dark"
-            ? makeOsmDarkLayer()
-            : makeOsmLayer();
-    next.addTo(map);
-    tileRef.current = next;
+    if (hy) {
+      map.removeLayer(hy);
+      hybridLabelsRef.current = null;
+    }
+    if (baseLayer === "hybrid") {
+      const sat = makeSatelliteLayer();
+      sat.addTo(map);
+      const labels = makeHybridLabelsLayer();
+      labels.addTo(map);
+      tileRef.current = sat;
+      hybridLabelsRef.current = labels;
+    } else {
+      const next =
+        baseLayer === "satellite"
+          ? makeSatelliteLayer()
+          : baseLayer === "topo"
+            ? makeTopoLayer()
+            : baseLayer === "osm_dark"
+              ? makeOsmDarkLayer()
+              : makeOsmLayer();
+      next.addTo(map);
+      tileRef.current = next;
+    }
   }, [baseLayer]);
 
   useEffect(() => {
@@ -277,6 +340,12 @@ function TacticalMapLeaflet({
     const el = map.getContainer();
     el.style.cursor = pointerMode === "crosshair" ? "crosshair" : "";
   }, [pointerMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    applyMapDim(map, mapDimPercent);
+  }, [mapDimPercent]);
 
   useEffect(() => {
     paintAll();
@@ -294,7 +363,12 @@ function TacticalMapLeaflet({
 
 const styles = StyleSheet.create({
   /** Match parent flex; `minHeight: 0` so Leaflet’s container gets real height on web. */
-  fill: { flex: 1, minHeight: 0, width: "100%" },
+  fill: {
+    flex: 1,
+    minHeight: 0,
+    width: "100%",
+    ...(Platform.OS === "web" ? ({ touchAction: "none" } as const) : null),
+  },
 });
 
 export { TacticalMapLeaflet };

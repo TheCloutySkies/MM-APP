@@ -1,8 +1,9 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Tabs } from "expo-router";
 import type { ComponentProps } from "react";
-import { Platform, StyleSheet } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 
+import { TacticalClockBadge } from "@/components/chrome/TacticalClockBadge";
 import { MMTabBar } from "@/components/navigation/MMTabBar";
 import { ScorchedEarthListener } from "@/components/ScorchedEarthListener";
 import { useDeadManMonitor } from "@/hooks/useDeadManMonitor";
@@ -15,13 +16,15 @@ function TabIcon(props: { name: ComponentProps<typeof FontAwesome>["name"]; colo
 
 export default function AppLayout() {
   const desktopMode = useMMStore((s) => s.desktopMode);
+  const tabRailWidthPx = useMMStore((s) => s.tabRailWidthPx);
+  const tabRailHeightPx = useMMStore((s) => s.tabRailHeightPx);
   useDeadManMonitor();
 
   const isWebDesk = Platform.OS === "web" && desktopMode;
   const theme = useTacticalChrome();
 
   return (
-    <>
+    <View style={styles.shell}>
       <ScorchedEarthListener />
       <Tabs
         tabBar={(props) => <MMTabBar {...props} />}
@@ -31,16 +34,23 @@ export default function AppLayout() {
           headerShown: false,
           tabBarStyle: isWebDesk
             ? {
-                width: 96,
+                width: tabRailWidthPx,
+                maxWidth: tabRailWidthPx,
+                minWidth: tabRailWidthPx,
+                flexGrow: 0,
+                flexShrink: 0,
+                alignSelf: "stretch",
                 backgroundColor: theme.background,
-                borderRightWidth: StyleSheet.hairlineWidth,
-                borderRightColor: "#3a4238",
                 elevation: 0,
               }
             : {
+                height: tabRailHeightPx,
+                minHeight: tabRailHeightPx,
+                maxHeight: tabRailHeightPx,
+                flexGrow: 0,
+                flexShrink: 0,
                 backgroundColor: theme.background,
-                borderTopWidth: StyleSheet.hairlineWidth,
-                borderTopColor: "#3a4238",
+                elevation: 0,
               },
           ...(isWebDesk
             ? {
@@ -67,7 +77,7 @@ export default function AppLayout() {
         <Tabs.Screen
           name="signals"
           options={{
-            title: "Signals",
+            title: "Ciphers",
             tabBarIcon: ({ color }) => <TabIcon name="signal" color={color} />,
           }}
         />
@@ -128,6 +138,13 @@ export default function AppLayout() {
           }}
         />
         <Tabs.Screen
+          name="calendar"
+          options={{
+            title: "Calendar",
+            tabBarIcon: ({ color }) => <TabIcon name="calendar" color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="settings"
           options={{
             title: "Settings",
@@ -135,6 +152,11 @@ export default function AppLayout() {
           }}
         />
       </Tabs>
-    </>
+      <TacticalClockBadge />
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  shell: { flex: 1 },
+});

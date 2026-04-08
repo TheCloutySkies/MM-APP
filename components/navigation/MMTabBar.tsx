@@ -7,6 +7,8 @@ import { isMainTabRouteId, MAIN_TAB_ROUTE_SET, MM_TAB_DRAG_MIME, type MainTabRou
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { useMMStore } from "@/store/mmStore";
 
+import { TabRailResizeEdge } from "./TabRailResizeEdge";
+
 type MMTabBarProps = BottomTabBarProps & { style?: StyleProp<ViewStyle> };
 
 function tabLabel(name: string, options: BottomTabNavigationOptions): string {
@@ -31,6 +33,8 @@ const DragWebView = View as ComponentType<
 export function MMTabBar({ state, descriptors, navigation, insets, style }: MMTabBarProps) {
   const theme = useTacticalChrome();
   const desktopMode = useMMStore((s) => s.desktopMode);
+  const tabRailWidthPx = useMMStore((s) => s.tabRailWidthPx);
+  const tabRailHeightPx = useMMStore((s) => s.tabRailHeightPx);
   const tabBarOrder = useMMStore((s) => s.tabBarOrder);
   const reorderMainTabs = useMMStore((s) => s.reorderMainTabs);
 
@@ -112,37 +116,48 @@ export function MMTabBar({ state, descriptors, navigation, insets, style }: MMTa
     dragPayloadRef.current = null;
   };
 
+  /** CRITICAL (web desk): root is a flex-row sibling next to `flex:1` scenes. Never use `flex:1` here or the rail steals ~50% width. */
   const railDeskStyle: ViewStyle = {
-    flexDirection: "column",
-    width: 96,
+    flexDirection: "row",
+    flexGrow: 0,
+    flexShrink: 0,
+    alignSelf: "stretch",
+    width: tabRailWidthPx,
+    minWidth: tabRailWidthPx,
+    maxWidth: tabRailWidthPx,
+    minHeight: 0,
     paddingTop: 8 + insets.top,
-    paddingBottom: 12 + insets.bottom,
+    paddingBottom: 4,
     backgroundColor: theme.background,
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: "#3a4238",
   };
 
   const railMobileStyle: ViewStyle = {
-    flexDirection: "row",
-    paddingBottom: Math.max(insets.bottom, 8),
-    paddingTop: 8,
-    paddingHorizontal: 4,
+    flexDirection: "column",
+    flexGrow: 0,
+    flexShrink: 0,
+    width: "100%",
+    height: tabRailHeightPx,
+    minHeight: tabRailHeightPx,
+    maxHeight: tabRailHeightPx,
     backgroundColor: theme.background,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#3a4238",
+    alignItems: "stretch",
   };
 
-  const railStyle: StyleProp<ViewStyle> = [styles.railBase, isWebDesk ? railDeskStyle : railMobileStyle, style];
+  const railStyle: StyleProp<ViewStyle> = [
+    styles.railBase,
+    isWebDesk ? railDeskStyle : railMobileStyle,
+    style,
+    isWebDesk
+      ? { flexGrow: 0, flexShrink: 0, width: tabRailWidthPx, minWidth: tabRailWidthPx, maxWidth: tabRailWidthPx }
+      : { flexGrow: 0, flexShrink: 0, height: tabRailHeightPx, minHeight: tabRailHeightPx, maxHeight: tabRailHeightPx },
+  ];
 
-  return (
-    <View
-      style={railStyle}
-      {...(Platform.OS === "web"
-        ? {
-            onDragOver: prevent,
-            onDrop: onRailDrop,
-          }
-        : {})}>
+  const tabCells = (
+    <>
       {orderedRoutes.map((route) => {
         const { options } = descriptors[route.key];
         const focused = route.key === activeKey;
@@ -196,7 +211,34 @@ export function MMTabBar({ state, descriptors, navigation, insets, style }: MMTa
             {cell}
           </DragWebView>
         );
-      })}
+        })}
+    </>
+  );
+
+  return (
+    <View
+      style={railStyle}
+      {...(Platform.OS === "web"
+        ? {
+            onDragOver: prevent,
+            onDrop: onRailDrop,
+          }
+        : {})}>
+      {isWebDesk ? (
+        <>
+          <View style={styles.tabStackDeskWrap}>
+            <View style={styles.tabStackDesk}>{tabCells}</View>
+          </View>
+          <TabRailResizeEdge variant="desk" />
+        </>
+      ) : (
+        <>
+          <TabRailResizeEdge variant="mob" />
+          <View style={[styles.tabStackMobile, { paddingBottom: Math.max(insets.bottom, 8), paddingTop: 8, paddingHorizontal: 4 }]}>
+            {tabCells}
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -204,6 +246,24 @@ export function MMTabBar({ state, descriptors, navigation, insets, style }: MMTa
 const styles = StyleSheet.create({
   railBase: {
     alignItems: "stretch",
+  },
+  tabStackDeskWrap: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+  },
+  tabStackDesk: {
+    flex: 1,
+    flexDirection: "column",
+    minHeight: 0,
+    justifyContent: "flex-start",
+  },
+  tabStackMobile: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    minWidth: 0,
+    minHeight: 0,
   },
   cellOuterVert: {
     alignSelf: "stretch",

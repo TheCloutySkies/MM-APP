@@ -1,5 +1,5 @@
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import { Platform } from "react-native";
+import { Dimensions, Platform } from "react-native";
 import { create } from "zustand";
 
 import {
@@ -13,8 +13,17 @@ import * as aes from "@/lib/crypto/aesGcm";
 import { hexToBytes, utf8 } from "@/lib/crypto/bytes";
 import { deriveKeyArgon2id } from "@/lib/crypto/kdf";
 import { getMapSharedKeyHex } from "@/lib/env";
+import type { LayoutPreference } from "@/lib/layout/layoutPreference";
+import {
+    getLayoutPreference,
+    getLayoutPreferenceAsync,
+    resolveDesktopFromLayoutPref,
+    setLayoutPreferencePersistent
+} from "@/lib/layout/layoutPreference";
 import { SK, secureGet, secureSet, wipeLocalSecrets, wipeSessionTokens } from "@/lib/secure/mmSecureStore";
 import { getAuthSupabase } from "@/lib/supabase/authSupabase";
+import { ensureCalendarSaltOnUnlock } from "@/lib/supabase/calendarProfile";
+import { isJwtExpired } from "@/lib/supabase/jwtExp";
 import { createMMSupabase } from "@/lib/supabase/mmClient";
 
 export type VaultMode = "main" | "decoy";
@@ -43,7 +52,44 @@ type MMState = {
   visualTheme: VisualThemeId;
   /** User-defined order for main tab rail (home, vault, map, …). */
   tabBarOrder: MainTabRouteId[];
+  /** Main tab rail width (px) when desktop / war-room layout. */
+  tabRailWidthPx: number;
+  /** Main tab bar height (px) when mobile / bottom rail. */
+  tabRailHeightPx: number;
+  /** 0–100 — darken map basemap in Night Ops (brightness / overlay). */
+  mapNightDimPercent: number;
 };
+
+function layoutWidthPx(): number {
+  if (Platform.OS === "web") {
+    if (typeof window !== "undefined") return window.innerWidth;
+    return 1024;
+  }
+  return Dimensions.get("window").width;
+}
+
+/** Left tab rail (desktop). */
+/** Desktop left rail — default / minimum 62px (compact column). */
+export const TAB_RAIL_DESK_W = { def: 62, min: 62, max: 280 } as const;
+/** Bottom tab bar (mobile). */
+export const TAB_RAIL_MOB_H = { def: 72, min: 52, max: 120 } as const;
+
+function clampDeskRailW(n: number): number {
+  if (!Number.isFinite(n)) return TAB_RAIL_DESK_W.def;
+  return Math.min(TAB_RAIL_DESK_W.max, Math.max(TAB_RAIL_DESK_W.min, Math.round(n)));
+}
+
+function clampMobRailH(n: number): number {
+  if (!Number.isFinite(n)) return TAB_RAIL_MOB_H.def;
+  return Math.min(TAB_RAIL_MOB_H.max, Math.max(TAB_RAIL_MOB_H.min, Math.round(n)));
+}
+
+export const MAP_NIGHT_DIM = { def: 48, min: 0, max: 100 } as const;
+
+function clampMapNightDim(n: number): number {
+  if (!Number.isFinite(n)) return MAP_NIGHT_DIM.def;
+  return Math.min(MAP_NIGHT_DIM.max, Math.max(MAP_NIGHT_DIM.min, Math.round(n)));
+}
 
 type MMActions = {
   hydrateFromStorage: () => Promise<void>;
@@ -59,6 +105,10 @@ type MMActions = {
   ) => Promise<void>;
   loadDesktopPref: () => Promise<void>;
   setDesktopMode: (v: boolean) => Promise<void>;
+  /** Tri-state layout: persists locally and updates derived desktopMode for current width. */
+  setLayoutTriPreference: (pref: LayoutPreference) => Promise<void>;
+  /** Web only: when layout preference is auto, update desktopMode from innerWidth without persisting. */
+  applyLayoutBreakpoint: () => void;
   setVisualTheme: (v: VisualThemeId) => Promise<void>;
   completeSetup: (args: {
     masterPassword: string;
@@ -79,6 +129,12 @@ type MMActions = {
   setTabBarOrder: (order: MainTabRouteId[]) => Promise<void>;
   /** Move one main tab to sit immediately before another (for drag reorder). */
   reorderMainTabs: (dragged: MainTabRouteId, beforeId: MainTabRouteId) => Promise<void>;
+  /** Clamp and set desktop rail width (in-memory; call `persistTabRailGeometry` after drag ends). */
+  setTabRailWidthPx: (px: number) => void;
+  /** Clamp and set mobile rail height (in-memory). */
+  setTabRailHeightPx: (px: number) => void;
+  persistTabRailGeometry: () => Promise<void>;
+  setMapNightDimPercent: (n: number) => Promise<void>;
 };
 
 async function persistSession(token: string, profileId: string, username: string) {
@@ -183,8 +239,25 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   vaultDriveViewMode: "list",
   visualTheme: "woodland",
   tabBarOrder: [...MAIN_TAB_ROUTE_ORDER],
+  tabRailWidthPx: TAB_RAIL_DESK_W.def,
+  tabRailHeightPx: TAB_RAIL_MOB_H.def,
+  mapNightDimPercent: MAP_NIGHT_DIM.def,
 
   setSupabaseClient: (c) => set({ supabase: c }),
+
+  setMapNightDimPercent: async (n) => {
+    const mapNightDimPercent = clampMapNightDim(n);
+    await secureSet(SK.mapNightDimPercent, String(mapNightDimPercent));
+    set({ mapNightDimPercent });
+  },
+
+  setTabRailWidthPx: (px) => set({ tabRailWidthPx: clampDeskRailW(px) }),
+  setTabRailHeightPx: (px) => set({ tabRailHeightPx: clampMobRailH(px) }),
+  persistTabRailGeometry: async () => {
+    const { tabRailWidthPx, tabRailHeightPx } = get();
+    await secureSet(SK.tabRailWidthDesk, String(tabRailWidthPx));
+    await secureSet(SK.tabRailHeightMob, String(tabRailHeightPx));
+  },
 
   setVisualTheme: async (v) => {
     await secureSet(SK.visualTheme, v);
@@ -198,13 +271,27 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
 
   hydrateFromStorage: async () => {
     const setupDone = (await secureGet(SK.setupDone)) === "1";
-    const desktopMode = (await secureGet(SK.desktopMode)) === "1";
+    let layoutPref: LayoutPreference = await getLayoutPreferenceAsync();
+    if (Platform.OS === "web") {
+      try {
+        layoutPref = getLayoutPreference();
+      } catch {
+        /* localStorage blocked */
+      }
+    }
+    let desktopMode = resolveDesktopFromLayoutPref(layoutWidthPx(), layoutPref);
     const vmode = (await secureGet(SK.vaultDriveViewMode)) as VaultDriveViewMode | null;
     const vaultDriveViewMode: VaultDriveViewMode = vmode === "grid" ? "grid" : "list";
     const vt = (await secureGet(SK.visualTheme)) as VisualThemeId | null;
     const visualTheme: VisualThemeId = vt === "nightops" ? "nightops" : "woodland";
 
     const tabBarOrder = normalizeTabOrder(await secureGet(SK.tabBarOrder));
+    const rw = await secureGet(SK.tabRailWidthDesk);
+    const rh = await secureGet(SK.tabRailHeightMob);
+    const tabRailWidthPx = clampDeskRailW(Number.parseInt(rw ?? "", 10));
+    const tabRailHeightPx = clampMobRailH(Number.parseInt(rh ?? "", 10));
+    const dimRaw = await secureGet(SK.mapNightDimPercent);
+    const mapNightDimPercent = clampMapNightDim(Number.parseInt(dimRaw ?? "", 10));
 
     let token: string | null = null;
     let profileId: string | null = null;
@@ -241,6 +328,12 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       token = await secureGet(SK.accessToken);
       profileId = await secureGet(SK.profileId);
       username = await secureGet(SK.username);
+      if (token && profileId && isJwtExpired(token)) {
+        await wipeSessionTokens();
+        token = null;
+        profileId = null;
+        username = null;
+      }
       if (token && profileId) {
         sessionSource = "legacy";
         supabase = await createMMSupabase(token);
@@ -266,6 +359,9 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       vaultDriveViewMode,
       visualTheme,
       tabBarOrder,
+      tabRailWidthPx,
+      tabRailHeightPx,
+      mapNightDimPercent,
     });
   },
 
@@ -280,13 +376,32 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   },
 
   loadDesktopPref: async () => {
-    const desktopMode = (await secureGet(SK.desktopMode)) === "1";
-    set({ desktopMode });
+    const pref = await getLayoutPreferenceAsync();
+    await get().setLayoutTriPreference(pref);
+  },
+
+  setLayoutTriPreference: async (pref) => {
+    await setLayoutPreferencePersistent(pref);
+    const desk = resolveDesktopFromLayoutPref(layoutWidthPx(), pref);
+    await secureSet(SK.desktopMode, desk ? "1" : "0");
+    set({ desktopMode: desk });
   },
 
   setDesktopMode: async (v) => {
-    await secureSet(SK.desktopMode, v ? "1" : "0");
-    set({ desktopMode: v });
+    await get().setLayoutTriPreference(v ? "desktop" : "mobile");
+  },
+
+  applyLayoutBreakpoint: () => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    let pref: ReturnType<typeof getLayoutPreference> = "auto";
+    try {
+      pref = getLayoutPreference();
+    } catch {
+      return;
+    }
+    if (pref !== "auto") return;
+    const desk = resolveDesktopFromLayoutPref(window.innerWidth, "auto");
+    if (get().desktopMode !== desk) set({ desktopMode: desk });
   },
 
   setTabBarOrder: async (order) => {
@@ -434,10 +549,16 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     }
     if (mainKey) {
       set({ mainVaultKey: mainKey, decoyVaultKey: null, vaultMode: "main" });
+      const supa = get().supabase;
+      const pid = get().profileId;
+      if (supa && pid) void ensureCalendarSaltOnUnlock(supa, pid, pin, "primary");
       return { ok: true, mode: "main" };
     }
     if (decoyKey) {
       set({ decoyVaultKey: decoyKey, mainVaultKey: null, vaultMode: "decoy" });
+      const supa = get().supabase;
+      const pid = get().profileId;
+      if (supa && pid) void ensureCalendarSaltOnUnlock(supa, pid, pin, "duress");
       return { ok: true, mode: "decoy" };
     }
     return { ok: false };

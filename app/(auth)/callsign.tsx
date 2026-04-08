@@ -22,6 +22,7 @@ import {
     normalizeCallsignInput,
     validateCallsign,
 } from "@/constants/callsign";
+import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useMMStore } from "@/store/mmStore";
 
@@ -206,6 +207,7 @@ export default function CallsignScreen() {
               <Text style={styles.btnTx}>Save callsign & continue</Text>
             )}
           </Pressable>
+          <LayoutOverrideBar />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

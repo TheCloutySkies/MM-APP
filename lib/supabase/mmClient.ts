@@ -89,6 +89,13 @@ function mapMmLoginFailure(body: MmLoginJson | null, httpStatus: number): MMLogi
       return new MMLoginError(code, "Access key did not match. Check caps lock and re-enter the key.");
     case "INVALID_REQUEST":
       return new MMLoginError(code, "Enter both username and access key.");
+    case "AMBIGUOUS_ALIAS":
+      return new MMLoginError(
+        code,
+        typeof body?.error === "string" && body.error
+          ? body.error
+          : "Several roster users match those initials. Use the full username.",
+      );
     case "SERVER_MISCONFIGURED":
       return new MMLoginError(
         code,

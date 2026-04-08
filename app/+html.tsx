@@ -10,7 +10,14 @@ export default function Root({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+        {/** PWA: dvh + viewport-fit; strict scale reduces accidental pinch zoom on tactical UI. */}
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, shrink-to-fit=no"
+        />
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#0d0f0c" />
+        <meta name="mobile-web-app-capable" content="yes" />
 
         {/* 
           Disable body scrolling on web. This makes ScrollView components work closer to how they do on native. 
@@ -31,8 +38,41 @@ export default function Root({ children }: { children: React.ReactNode }) {
 const TACTICAL_PAGE_BG = "#0d0f0c";
 
 const responsiveBackground = `
-html, body, #root, #__expo {
+html {
+  height: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+  margin: 0;
   background-color: ${TACTICAL_PAGE_BG};
-  min-height: 100%;
+}
+body {
+  height: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  overscroll-behavior: none;
+  margin: 0;
+  -webkit-overflow-scrolling: auto;
+  touch-action: manipulation;
+  background-color: ${TACTICAL_PAGE_BG};
+}
+#root, #__expo {
+  background-color: ${TACTICAL_PAGE_BG};
+  height: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* Leaflet: pan-zoom without scrolling the page */
+.leaflet-container {
+  touch-action: none;
+}
+.mm-leaflet-host, [data-mm-leaflet-root] {
+  touch-action: none;
 }
 `;

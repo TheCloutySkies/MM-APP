@@ -5,11 +5,12 @@ import { useWindowDimensions } from "react-native";
 import { PanicButton } from "@/components/PanicButton";
 import { TacticalCard } from "@/components/TacticalCard";
 import type { MainTabRouteId } from "@/constants/mainTabs";
-import { TacticalPalette } from "@/constants/TacticalTheme";
+import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { useMMStore } from "@/store/mmStore";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export default function HomeScreen() {
+  const chrome = useTacticalChrome();
   const username = useMMStore((s) => s.username);
   const tabBarOrder = useMMStore((s) => s.tabBarOrder);
   const reorderMainTabs = useMMStore((s) => s.reorderMainTabs);
@@ -27,23 +28,23 @@ export default function HomeScreen() {
 
   return (
     <ScrollView
-      style={styles.scroll}
+      style={[styles.scroll, { backgroundColor: chrome.background }]}
       contentContainerStyle={[styles.content, width >= 720 && styles.contentWide]}>
       <View style={styles.topTools}>
         <PanicButton variant="compact" />
         <Link href="/(app)/settings" asChild>
           <Pressable accessibilityRole="button" hitSlop={10}>
-            <FontAwesome name="cog" size={22} color={TacticalPalette.boneMuted} />
+            <FontAwesome name="cog" size={22} color={chrome.textMuted} />
           </Pressable>
         </Link>
       </View>
       <View style={styles.header}>
-        <Text style={styles.kicker}>MM</Text>
-        <Text style={styles.h1}>Operations hub</Text>
-        <Text style={styles.sub}>
+        <Text style={[styles.kicker, { color: chrome.tint }]}>MM</Text>
+        <Text style={[styles.h1, { color: chrome.text }]}>Operations hub</Text>
+        <Text style={[styles.sub, { color: chrome.textMuted }]}>
           {username ? `Signed in as ${username}` : "Secure session"} — choose a module.
         </Text>
-        <Text style={styles.hubHint}>
+        <Text style={[styles.hubHint, { color: chrome.tabIconDefault }]}>
           Web: drag a highlighted module onto the tab rail to reorder it (drop on a tab or empty rail). Long-press the same
           cards on mobile to pin that tab to the top of the rail.
         </Text>
@@ -58,17 +59,17 @@ export default function HomeScreen() {
             href="/(app)/vault"
             tabBarDragId="vault"
             onPinToTabBar={() => pinModuleTab("vault")}
-            icon={<FontAwesome name="lock" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="lock" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
-            title="Signals"
+            title="Ciphers"
             subtitle="Ciphers, OTP, compressor, stego"
             href="/(app)/signals"
             tabBarDragId="signals"
             onPinToTabBar={() => pinModuleTab("signals")}
-            icon={<FontAwesome name="signal" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="signal" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -78,7 +79,7 @@ export default function HomeScreen() {
             href="/(app)/map"
             tabBarDragId="map"
             onPinToTabBar={() => pinModuleTab("map")}
-            icon={<FontAwesome name="map" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="map" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -88,7 +89,7 @@ export default function HomeScreen() {
             href="/(app)/reports"
             tabBarDragId="reports"
             onPinToTabBar={() => pinModuleTab("reports")}
-            icon={<FontAwesome name="file-text" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="file-text" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -96,7 +97,7 @@ export default function HomeScreen() {
             title="Forensics"
             subtitle="Metadata, integrity, media scrub"
             href="/(app)/forensics"
-            icon={<FontAwesome name="search" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="search" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -106,7 +107,17 @@ export default function HomeScreen() {
             href="/(app)/missions"
             tabBarDragId="missions"
             onPinToTabBar={() => pinModuleTab("missions")}
-            icon={<FontAwesome name="folder" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="folder" size={24} color={chrome.accent} />}
+          />
+        </View>
+        <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
+          <TacticalCard
+            title="Calendar"
+            subtitle="ZK duress scheduling — PIN unlock, encrypted sync"
+            href="/(app)/calendar"
+            tabBarDragId="calendar"
+            onPinToTabBar={() => pinModuleTab("calendar")}
+            icon={<FontAwesome name="calendar" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -116,7 +127,7 @@ export default function HomeScreen() {
             href="/(app)/settings"
             tabBarDragId="settings"
             onPinToTabBar={() => pinModuleTab("settings")}
-            icon={<FontAwesome name="cog" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="cog" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -124,7 +135,7 @@ export default function HomeScreen() {
             title="Good Palantir"
             subtitle="Open external dashboard (new tab)"
             externalUrl="https://good-palantir.vercel.app"
-            icon={<FontAwesome name="globe" size={24} color={TacticalPalette.coyote} />}
+            icon={<FontAwesome name="globe" size={24} color={chrome.tabIconDefault} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -132,7 +143,7 @@ export default function HomeScreen() {
             title="Bulletin"
             subtitle="Encrypted team announcements"
             href="/(app)/bulletin"
-            icon={<FontAwesome name="bullhorn" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="bullhorn" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -140,7 +151,7 @@ export default function HomeScreen() {
             title="Gear / logistics"
             subtitle="Typed loadouts — vehicles, kit, sustainment…"
             href="/(app)/gear"
-            icon={<FontAwesome name="suitcase" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="suitcase" size={24} color={chrome.accent} />}
           />
         </View>
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
@@ -148,7 +159,7 @@ export default function HomeScreen() {
             title="Team GPX"
             subtitle="Export map pins & routes for other apps"
             href="/(app)/map-exports"
-            icon={<FontAwesome name="download" size={24} color={TacticalPalette.accent} />}
+            icon={<FontAwesome name="download" size={24} color={chrome.accent} />}
           />
         </View>
       </View>
@@ -159,7 +170,6 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: TacticalPalette.matteBlack,
   },
   content: {
     padding: 16,
@@ -182,25 +192,21 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   kicker: {
-    color: TacticalPalette.coyote,
     fontSize: 11,
     letterSpacing: 2,
     fontWeight: "700",
     marginBottom: 6,
   },
   h1: {
-    color: TacticalPalette.bone,
     fontSize: 26,
     fontWeight: "700",
   },
   sub: {
-    color: TacticalPalette.boneMuted,
     fontSize: 14,
     marginTop: 8,
     lineHeight: 20,
   },
   hubHint: {
-    color: TacticalPalette.coyote,
     fontSize: 12,
     lineHeight: 17,
     marginTop: 12,

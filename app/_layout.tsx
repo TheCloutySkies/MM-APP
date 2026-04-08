@@ -6,9 +6,16 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import "react-native-reanimated";
 
+import { LayoutProvider } from "@/components/layout/LayoutProvider";
+import { LayoutWelcomeGate } from "@/components/layout/LayoutWelcomeGate";
+import { PwaShellReadyBanner } from "@/components/offline/PwaShellReadyBanner";
 import { useColorScheme } from "@/components/useColorScheme";
-import { TacticalPalette } from "@/constants/TacticalTheme";
+import { useTacticalChrome } from "@/hooks/useTacticalChrome";
+import { registerMmServiceWorker } from "@/lib/offline/registerServiceWorker";
+import { flushPendingSyncStub } from "@/lib/offline/syncQueue";
 import { useMMStore } from "@/store/mmStore";
+import { Platform } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 export { ErrorBoundary } from "expo-router";
 
@@ -44,17 +51,41 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
+  const chrome = useTacticalChrome();
+  const applyLayoutBreakpoint = useMMStore((s) => s.applyLayoutBreakpoint);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    applyLayoutBreakpoint();
+    const onResize = () => applyLayoutBreakpoint();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [applyLayoutBreakpoint]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    registerMmServiceWorker();
+    const onLine = () => void flushPendingSyncStub();
+    window.addEventListener("online", onLine);
+    return () => window.removeEventListener("online", onLine);
+  }, []);
 
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <Stack
-        screenOptions={{
-          contentStyle: { flex: 1, backgroundColor: TacticalPalette.matteBlack },
-        }}>
-        <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(app)" options={{ headerShown: false }} />
-      </Stack>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+        <LayoutProvider>
+          <PwaShellReadyBanner />
+          <LayoutWelcomeGate />
+          <Stack
+            screenOptions={{
+              contentStyle: { flex: 1, backgroundColor: chrome.background },
+            }}>
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen name="(app)" options={{ headerShown: false }} />
+          </Stack>
+        </LayoutProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }

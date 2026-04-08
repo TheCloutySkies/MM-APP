@@ -10,13 +10,13 @@ import MapView, {
 } from "react-native-maps";
 
 import type {
-  MapBaseLayerId,
-  MapFlyToRequest,
-  MapPin,
-  MapPolygonOverlay,
-  MapPolylineOverlay,
-  MapPointerMode,
-  MapUserLocation,
+    MapBaseLayerId,
+    MapFlyToRequest,
+    MapPin,
+    MapPointerMode,
+    MapPolygonOverlay,
+    MapPolylineOverlay,
+    MapUserLocation,
 } from "./mapTypes";
 
 export type { MapFlyToRequest, MapPin };
@@ -32,6 +32,10 @@ export const OPENTOPOMAP_TILE_TEMPLATE = "https://{s}.tile.opentopomap.org/{z}/{
 export const ESRI_SATELLITE_TILE_TEMPLATE =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 
+/** Esri reference labels on top of imagery (hybrid / “Bing-style” stack). */
+export const ESRI_REFERENCE_LABELS_TILE_TEMPLATE =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}";
+
 type Props = {
   pins: MapPin[];
   polylines?: MapPolylineOverlay[];
@@ -43,6 +47,7 @@ type Props = {
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
+  mapDimPercent?: number;
 };
 
 function zoomToDeltas(lat: number, zoom: number) {
@@ -65,6 +70,7 @@ export function TacticalMap({
   userLocation,
   pointerMode: _pointerMode = "default",
   onCenterChange,
+  mapDimPercent = 0,
 }: Props) {
   const mapRef = useRef<MapView>(null);
   const baseMapType =
@@ -121,7 +127,7 @@ export function TacticalMap({
           minimumZ={0}
           tileSize={256}
           urlTemplate={
-            baseLayer === "satellite"
+            baseLayer === "satellite" || baseLayer === "hybrid"
               ? ESRI_SATELLITE_TILE_TEMPLATE
               : baseLayer === "topo"
                 ? OPENTOPOMAP_TILE_TEMPLATE
@@ -134,6 +140,16 @@ export function TacticalMap({
             : {})}
           zIndex={-1}
         />
+        {baseLayer === "hybrid" ? (
+          <UrlTile
+            flipY={false}
+            maximumZ={19}
+            minimumZ={0}
+            tileSize={256}
+            urlTemplate={ESRI_REFERENCE_LABELS_TILE_TEMPLATE}
+            zIndex={0}
+          />
+        ) : null}
         {polygons.map((poly) => (
           <Polygon
             key={poly.id}
@@ -181,6 +197,17 @@ export function TacticalMap({
           />
         ))}
       </MapView>
+      {mapDimPercent > 0 ? (
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFillObject,
+            {
+              backgroundColor: `rgba(0,0,0,${Math.max(0, Math.min(100, mapDimPercent)) / 100 * 0.72})`,
+            },
+          ]}
+        />
+      ) : null}
       <View style={styles.attribution} pointerEvents="none">
         <Text style={styles.attributionText}>© OpenStreetMap contributors</Text>
       </View>

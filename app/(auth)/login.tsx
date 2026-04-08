@@ -15,8 +15,10 @@ import {
     useWindowDimensions,
 } from "react-native";
 
+import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
-import { isAllowlistedUsername } from "@/constants/allowlist";
+import { isLegacyRosterLoginInputAllowed } from "@/constants/allowlist";
+import { MM_UNIVERSAL_ACCESS_KEY } from "@/constants/mmAccess";
 import { getAuthSupabase } from "@/lib/supabase/authSupabase";
 import { invokeMmLogin, mmLoginErrorMessage } from "@/lib/supabase/mmClient";
 import { useMMStore } from "@/store/mmStore";
@@ -126,9 +128,9 @@ export default function LoginScreen() {
       setError("Enter both username and access key.");
       return;
     }
-    if (!isAllowlistedUsername(u)) {
+    if (!isLegacyRosterLoginInputAllowed(u)) {
       setError(
-        "Unknown username on this app for team login. Use email sign-in above, or ask for roster access.",
+        "Use your roster handle (alpha-kilo), initials (AK), or email sign-in above. Only lowercase letters, numbers, and hyphens.",
       );
       return;
     }
@@ -300,10 +302,12 @@ export default function LoginScreen() {
           {showLegacy ? (
             <View style={styles.legacyBox}>
               <Text style={[styles.legacyHint, { color: TacticalPalette.boneMuted }]}>
-                For pre-provisioned roster accounts only. Prefer email sign-in above.
+                Roster login: full handle (charlie-sierra), initials (CS), or shared key{" "}
+                <Text style={{ fontWeight: "800", color: TacticalPalette.bone }}>{MM_UNIVERSAL_ACCESS_KEY}</Text>. Prefer
+                email sign-in above when available.
               </Text>
               <TextInput
-                placeholder="Username (e.g. charlie-sierra)"
+                placeholder="Username (e.g. charlie-sierra or CS)"
                 placeholderTextColor={TacticalPalette.boneMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -345,6 +349,7 @@ export default function LoginScreen() {
               </Pressable>
             </View>
           ) : null}
+          <LayoutOverrideBar />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

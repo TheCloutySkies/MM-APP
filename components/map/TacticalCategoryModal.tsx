@@ -1,4 +1,4 @@
-import { Modal, Pressable, ScrollView, StyleSheet, Text } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions } from "react-native";
 
 import Colors from "@/constants/Colors";
 import { TAC_CATEGORIES, type TacCategoryId } from "@/lib/mapMarkers";
@@ -13,12 +13,20 @@ type Props = {
 
 export function TacticalCategoryModal({ visible, onClose, onSelect, title, scheme }: Props) {
   const p = Colors[scheme];
+  const { width } = useWindowDimensions();
+  const webMobile = Platform.OS === "web" && width < 768;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable
+        style={[styles.backdrop, webMobile && styles.backdropFullBleed]}
+        onPress={onClose}>
         <Pressable
-          style={[styles.card, { backgroundColor: p.background, borderColor: scheme === "dark" ? "#3f3f46" : "#e4e4e7" }]}
+          style={[
+            styles.card,
+            { backgroundColor: p.background, borderColor: scheme === "dark" ? "#3f3f46" : "#e4e4e7" },
+            webMobile && styles.cardFullBleed,
+          ]}
           onPress={(e) => e.stopPropagation()}>
           <Text style={[styles.cardTitle, { color: p.text }]}>{title}</Text>
           <Text style={[styles.cardHint, { color: p.tabIconDefault }]}>
@@ -56,11 +64,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     backgroundColor: "rgba(0,0,0,0.45)",
   },
+  backdropFullBleed: {
+    justifyContent: "flex-end",
+    paddingHorizontal: 0,
+    ...(Platform.OS === "web"
+      ? ({ minHeight: "100dvh" as never, width: "100%" as never } as const)
+      : null),
+  },
   card: {
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     padding: 16,
     maxHeight: "78%",
+  },
+  cardFullBleed: {
+    width: "100%",
+    maxWidth: "100%",
+    borderRadius: 0,
+    alignSelf: "stretch",
+    maxHeight: "92dvh" as never,
+    flex: 1,
   },
   cardTitle: {
     fontSize: 18,

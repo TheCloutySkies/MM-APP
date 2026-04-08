@@ -10,6 +10,7 @@ import {
     useWindowDimensions,
 } from "react-native";
 
+import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useMMStore } from "@/store/mmStore";
 
@@ -53,9 +54,6 @@ export default function UnlockScreen() {
           },
         ]}>
         MM
-      </Text>
-      <Text style={[styles.note, { color: TacticalPalette.boneMuted }]}>
-        Same screen for primary or duress PIN. Master password + PIN.
       </Text>
       <TextInput
         placeholder="Master password"
@@ -113,6 +111,7 @@ export default function UnlockScreen() {
         ]}>
         <Text style={styles.btnTx}>Unlock</Text>
       </Pressable>
+        <LayoutOverrideBar />
       </View>
     </View>
   );
@@ -141,7 +140,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: -24,
   },
-  note: { marginBottom: 8, fontSize: 14, textAlign: "center", lineHeight: 20 },
   input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, fontSize: 18, minHeight: 52 },
   btn: { paddingVertical: 16, borderRadius: 12, alignItems: "center" },
   btnTx: { color: TacticalPalette.bone, fontWeight: "700", fontSize: 16 },
