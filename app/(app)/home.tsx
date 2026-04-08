@@ -1,9 +1,7 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Link } from "expo-router";
-import { useState } from "react";
 import { useWindowDimensions } from "react-native";
 
-import { GoodPalantirWindow } from "@/components/GoodPalantirWindow";
 import { PanicButton } from "@/components/PanicButton";
 import { TacticalCard } from "@/components/TacticalCard";
 import type { MainTabRouteId } from "@/constants/mainTabs";
@@ -15,7 +13,6 @@ export default function HomeScreen() {
   const username = useMMStore((s) => s.username);
   const tabBarOrder = useMMStore((s) => s.tabBarOrder);
   const reorderMainTabs = useMMStore((s) => s.reorderMainTabs);
-  const [palantirOpen, setPalantirOpen] = useState(false);
   const { width } = useWindowDimensions();
   const gap = 12;
   const contentMax = 960;
@@ -32,7 +29,6 @@ export default function HomeScreen() {
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={[styles.content, width >= 720 && styles.contentWide]}>
-      <GoodPalantirWindow visible={palantirOpen} onClose={() => setPalantirOpen(false)} />
       <View style={styles.topTools}>
         <PanicButton variant="compact" />
         <Link href="/(app)/settings" asChild>
@@ -126,8 +122,8 @@ export default function HomeScreen() {
         <View style={{ width: cardBasis, flexGrow: 1, maxWidth: "100%" as const }}>
           <TacticalCard
             title="Good Palantir"
-            subtitle="Floating embed on web · launch external if host blocks iframes"
-            onCustomPress={() => setPalantirOpen(true)}
+            subtitle="Open external dashboard (new tab)"
+            externalUrl="https://good-palantir.vercel.app"
             icon={<FontAwesome name="globe" size={24} color={TacticalPalette.coyote} />}
           />
         </View>
