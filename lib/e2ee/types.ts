@@ -9,6 +9,9 @@ export type E2eeBroadcastV1 = {
   clientMsgId: string;
 };
 
+/** Outbound message lifecycle (shown on your bubbles only). */
+export type ChatDeliveryStatus = "pending" | "queued" | "sent";
+
 export type E2eeChatMessage = {
   id: string;
   clientMsgId: string;
@@ -16,6 +19,8 @@ export type E2eeChatMessage = {
   plaintext: string;
   ts: number;
   mine: boolean;
+  /** Present for messages you sent; defaults to sent when absent (history / inbound). */
+  deliveryStatus?: ChatDeliveryStatus;
 };
 
 export type E2eeEnvelopeRow = {

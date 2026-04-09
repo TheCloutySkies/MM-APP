@@ -2,6 +2,7 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
     Alert,
+    Platform,
     Pressable,
     StyleSheet,
     Text,
@@ -12,6 +13,7 @@ import {
 
 import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
+import { bootstrapIdentityOnDevice, hasLocalIdentity } from "@/lib/e2ee/identity";
 import { useMMStore } from "@/store/mmStore";
 
 export default function UnlockScreen() {
@@ -20,6 +22,8 @@ export default function UnlockScreen() {
   const router = useRouter();
   const tryUnlock = useMMStore((s) => s.tryUnlock);
   const touchRealUnlock = useMMStore((s) => s.touchRealUnlock);
+  const supabase = useMMStore((s) => s.supabase);
+  const profileId = useMMStore((s) => s.profileId);
 
   const [master, setMaster] = useState("");
   const [pin, setPin] = useState("");
@@ -34,6 +38,13 @@ export default function UnlockScreen() {
         return;
       }
       if (r.mode === "main") await touchRealUnlock();
+      if (Platform.OS === "web" && r.mode === "main" && supabase && profileId) {
+        const local = await hasLocalIdentity(profileId);
+        if (!local) {
+          const { error: msgErr } = await bootstrapIdentityOnDevice(supabase, profileId, pin);
+          if (msgErr) console.warn("Team chat keys:", msgErr.message);
+        }
+      }
       router.replace("/(app)/home");
     } finally {
       setBusy(false);

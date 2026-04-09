@@ -10,6 +10,7 @@ import { MMTabBar } from "@/components/navigation/MMTabBar";
 import { OpsScreeningGate } from "@/components/ops/OpsScreeningGate";
 import { ScorchedEarthListener } from "@/components/ScorchedEarthListener";
 import { TacticalPalette } from "@/constants/TacticalTheme";
+import { useActivityOutboxFlush } from "@/hooks/useActivityOutboxFlush";
 import { useDeadManMonitor } from "@/hooks/useDeadManMonitor";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { useMMStore } from "@/store/mmStore";
@@ -23,6 +24,7 @@ export default function AppLayout() {
   const tabRailWidthPx = useMMStore((s) => s.tabRailWidthPx);
   const tabRailHeightPx = useMMStore((s) => s.tabRailHeightPx);
   useDeadManMonitor();
+  useActivityOutboxFlush();
 
   const isWebDesk = Platform.OS === "web" && desktopMode;
   const theme = useTacticalChrome();
@@ -119,6 +121,13 @@ export default function AppLayout() {
           }}
         />
         <Tabs.Screen
+          name="sand-table"
+          options={{
+            title: "Sand Table",
+            href: null,
+          }}
+        />
+        <Tabs.Screen
           name="operation-detail"
           options={{
             title: "Operation",
@@ -151,6 +160,13 @@ export default function AppLayout() {
           options={{
             title: "Calendar",
             tabBarIcon: ({ color }) => <TabIcon name="calendar" color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="activity"
+          options={{
+            title: "Activity",
+            tabBarIcon: ({ color }) => <TabIcon name="history" color={color} />,
           }}
         />
         <Tabs.Screen

@@ -32,7 +32,10 @@ export type OpsDocKind =
   | "sitrep"
   | "aar"
   | "target_package"
-  | "intel_report";
+  | "intel_report"
+  | "spotrep"
+  | "medevac_nine_line"
+  | "route_recon";
 
 export const OPS_AAD = {
   mission_plan: "mm-ops-mission",
@@ -40,12 +43,18 @@ export const OPS_AAD = {
   aar: "mm-ops-aar",
   target_package: "mm-ops-target-pkg",
   intel_report: "mm-ops-intel",
+  spotrep: "mm-ops-spotrep",
+  medevac_nine_line: "mm-ops-medevac-9",
+  route_recon: "mm-ops-route-recon",
 } as const;
 
 export const OPERATION_HUB_AAD = "mm-operation-hub-v1" as const;
 export const BULLETIN_AAD = "mm-ops-bulletin-v1" as const;
 /** Reply thread on mission_plan / other ops_reports rows (same decrypt key as map/ops). */
 export const OPS_COMMENT_AAD = "mm-ops-comment-v1" as const;
+/** Sand Table isolated editor exports (same decrypt material as map / ops when embedded in route recon). */
+export const SAND_TABLE_GEOJSON_AAD = "mm-sand-table-geojson-v1" as const;
+export const SAND_TABLE_PNG_AAD = "mm-sand-table-png-v1" as const;
 
 export type OpsCommentPayloadV1 = {
   v: 1;
@@ -157,6 +166,122 @@ export type IntelReportPayloadV1 = {
   createdAt: number;
 };
 
+/** SPOTREP — SALUTE activity (dropdown). */
+export type SpotrepActivityId =
+  | "stationary"
+  | "moving_n"
+  | "moving_s"
+  | "moving_e"
+  | "moving_w"
+  | "patrol"
+  | "occupying"
+  | "defending";
+
+export const SPOTREP_ACTIVITY_CHOICES: { id: SpotrepActivityId; label: string }[] = [
+  { id: "stationary", label: "Stationary" },
+  { id: "moving_n", label: "Moving N" },
+  { id: "moving_s", label: "Moving S" },
+  { id: "moving_e", label: "Moving E" },
+  { id: "moving_w", label: "Moving W" },
+  { id: "patrol", label: "Patrol" },
+  { id: "occupying", label: "Occupying" },
+  { id: "defending", label: "Defending" },
+];
+
+export function spotrepActivityLabel(id: string): string {
+  const row = SPOTREP_ACTIVITY_CHOICES.find((c) => c.id === id);
+  return row?.label ?? id;
+}
+
+export type SpotrepPayloadV1 = {
+  v: 1;
+  kind: "spotrep";
+  saluteSize: string;
+  saluteActivity: SpotrepActivityId | string;
+  saluteLocation: string;
+  saluteUnit: string;
+  saluteTime: string;
+  saluteEquipment: string;
+  assessment: string;
+  createdAt: number;
+};
+
+export type MedevacSpecialEquipment = "none" | "hoist" | "extraction" | "ventilator";
+
+export const MEDEVAC_SPECIAL_EQUIPMENT_CHOICES: { id: MedevacSpecialEquipment; label: string }[] = [
+  { id: "none", label: "None" },
+  { id: "hoist", label: "Hoist" },
+  { id: "extraction", label: "Extraction equipment" },
+  { id: "ventilator", label: "Ventilator" },
+];
+
+export type MedevacNineLinePayloadV1 = {
+  v: 1;
+  kind: "medevac_nine_line";
+  line1_location: string;
+  line2_callsignFreq: string;
+  line3_urgent: number;
+  line3_priority: number;
+  line3_routine: number;
+  line4_specialEquipment: MedevacSpecialEquipment;
+  line5_litter: number;
+  line5_ambulatory: number;
+  line6_securityAtPickup?: string;
+  line7_markingMethod?: string;
+  line8_nationalityStatus?: string;
+  line9_nbCbrn?: string;
+  createdAt: number;
+};
+
+export type RouteReconMarkerKind = "bridge" | "choke" | "comm_zone";
+
+export type RouteReconBridgeMarker = {
+  kind: "bridge";
+  id: string;
+  lat: number;
+  lng: number;
+  mgrs?: string;
+  weightLimit?: string;
+  heightClearance?: string;
+  notes?: string;
+};
+
+export type RouteReconChokeMarker = {
+  kind: "choke";
+  id: string;
+  lat: number;
+  lng: number;
+  mgrs?: string;
+  description?: string;
+};
+
+export type RouteReconCommMarker = {
+  kind: "comm_zone";
+  id: string;
+  lat: number;
+  lng: number;
+  mgrs?: string;
+  /** Green = good, yellow = marginal, red = dead. */
+  signalStrength: "good" | "marginal" | "dead";
+  notes?: string;
+};
+
+export type RouteReconMarkerV1 = RouteReconBridgeMarker | RouteReconChokeMarker | RouteReconCommMarker;
+
+export type RouteReconPayloadV1 = {
+  v: 1;
+  kind: "route_recon";
+  routeName: string;
+  startMgrs: string;
+  endMgrs: string;
+  markers: RouteReconMarkerV1[];
+  createdAt: number;
+  /** AES-GCM JSON bundle (see `encryptUtf8`) of a GeoJSON FeatureCollection from the Sand Table editor. */
+  sandTableGeoJsonCipher?: string;
+  /** AES-GCM JSON bundle of a PNG data URL (`data:image/png;base64,...`) snapshot of the sand table map view. */
+  sandTablePngCipher?: string;
+};
+
 export type BulletinPostPayloadV1 = {
   v: 1;
   title: string;
@@ -255,7 +380,10 @@ export type AnyOpsPayload =
   | SitrepPayloadV1
   | AarPayloadV1
   | TargetPackagePayloadV1
-  | IntelReportPayloadV1;
+  | IntelReportPayloadV1
+  | SpotrepPayloadV1
+  | MedevacNineLinePayloadV1
+  | RouteReconPayloadV1;
 
 export function parseMembersInput(raw: string): string[] {
   return raw
@@ -277,6 +405,12 @@ export function formatDocKindLabel(kind: OpsDocKind): string {
       return "Target package";
     case "intel_report":
       return "Intel report";
+    case "spotrep":
+      return "SPOTREP";
+    case "medevac_nine_line":
+      return "9-line MEDEVAC";
+    case "route_recon":
+      return "Route recon";
     default:
       return kind;
   }
@@ -299,6 +433,15 @@ export function previewOpsRow(kind: OpsDocKind, decryptedJson: string): string {
         return String(o.objectiveName ?? "Target package");
       case "intel_report":
         return String(o.title ?? "Intel report");
+      case "spotrep": {
+        const loc = o.saluteLocation ? String(o.saluteLocation) : "";
+        const t = o.saluteTime ? String(o.saluteTime) : "";
+        return [loc, t].filter(Boolean).join(" · ") || "SPOTREP";
+      }
+      case "medevac_nine_line":
+        return String(o.line1_location ?? "9-line MEDEVAC");
+      case "route_recon":
+        return String(o.routeName ?? "Route recon");
       default:
         return kind;
     }
@@ -401,4 +544,80 @@ export function formatIntelReportForDisplay(p: IntelReportPayloadV1): string {
   }
   if (p.remarks) head.push(`REMARKS: ${p.remarks}`);
   return head.join("\n");
+}
+
+export function formatSpotrepForDisplay(p: SpotrepPayloadV1): string {
+  const act = spotrepActivityLabel(String(p.saluteActivity));
+  return [
+    "SPOTREP (SALUTE)",
+    `[S]IZE: ${p.saluteSize || "—"}`,
+    `[A]CTIVITY: ${act}`,
+    `[L]OCATION: ${p.saluteLocation || "—"}`,
+    `[U]NIT / UNIFORM: ${p.saluteUnit || "—"}`,
+    `[T]IME (DTG): ${p.saluteTime || "—"}`,
+    `[E]QUIPMENT: ${p.saluteEquipment || "—"}`,
+    "",
+    `ASSESSMENT: ${p.assessment || "—"}`,
+  ].join("\n");
+}
+
+export function formatMedevacNineLineForDisplay(p: MedevacNineLinePayloadV1): string {
+  const spec =
+    MEDEVAC_SPECIAL_EQUIPMENT_CHOICES.find((x) => x.id === p.line4_specialEquipment)?.label ??
+    p.line4_specialEquipment;
+  return [
+    "9-LINE MEDEVAC",
+    `1. Location: ${p.line1_location || "—"}`,
+    `2. Callsign / freq: ${p.line2_callsignFreq || "—"}`,
+    `3. Precedence — Urgent: ${p.line3_urgent} · Priority: ${p.line3_priority} · Routine: ${p.line3_routine}`,
+    `4. Special equipment: ${spec}`,
+    `5. Patients — Litter: ${p.line5_litter} · Ambulatory: ${p.line5_ambulatory}`,
+    p.line6_securityAtPickup ? `6. Security at pickup: ${p.line6_securityAtPickup}` : "6. Security at pickup: —",
+    p.line7_markingMethod ? `7. Marking method: ${p.line7_markingMethod}` : "7. Marking method: —",
+    p.line8_nationalityStatus ? `8. Nationality / status: ${p.line8_nationalityStatus}` : "8. Nationality / status: —",
+    p.line9_nbCbrn ? `9. NBC / CBRN: ${p.line9_nbCbrn}` : "9. NBC / CBRN: —",
+  ].join("\n");
+}
+
+function routeReconMarkerSummary(m: RouteReconMarkerV1): string {
+  const grid = m.mgrs?.trim() ? m.mgrs : `${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}`;
+  if (m.kind === "bridge") {
+    const w = m.weightLimit?.trim() ? ` · W limit ${m.weightLimit}` : "";
+    const h = m.heightClearance?.trim() ? ` · H clr ${m.heightClearance}` : "";
+    return `Bridge @ ${grid}${w}${h}`;
+  }
+  if (m.kind === "choke") {
+    return `Hazard / choke @ ${grid}${m.description ? ` — ${m.description}` : ""}`;
+  }
+  return `Comm (${m.signalStrength}) @ ${grid}${m.notes ? ` — ${m.notes}` : ""}`;
+}
+
+export function formatRouteReconForDisplay(p: RouteReconPayloadV1): string {
+  const head = [
+    "ROUTE RECONNAISSANCE",
+    `ROUTE / ID: ${p.routeName || "—"}`,
+    `START: ${p.startMgrs || "—"}`,
+    `END: ${p.endMgrs || "—"}`,
+  ];
+  if (p.markers?.length) {
+    head.push("", "MARKERS:");
+    p.markers.forEach((m, i) => head.push(`  ${i + 1}. ${routeReconMarkerSummary(m)}`));
+  }
+  if (p.sandTableGeoJsonCipher) {
+    head.push("", "SAND TABLE: encrypted GeoJSON plan attached");
+  }
+  if (p.sandTablePngCipher) {
+    head.push("SAND TABLE: encrypted PNG snapshot attached");
+  }
+  return head.join("\n");
+}
+
+/** Zulu DTG commonly written as DDHHMMzMONYY (e.g.081430zAPR26). */
+export function formatZuluDtg(d = new Date()): string {
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const mon = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"][d.getUTCMonth()];
+  const yy = String(d.getUTCFullYear()).slice(-2);
+  return `${day}${hh}${mm}z${mon}${yy}`;
 }

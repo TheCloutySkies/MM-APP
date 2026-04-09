@@ -1,13 +1,13 @@
-import type { E2eeBroadcastV1 } from "./types";
-import { HKDF_DM } from "./constants";
-import {
-  aesGcmDecryptUtf8,
-  aesGcmEncryptUtf8,
-  deriveAesGcmKeyFromEcdh,
-  importPublicSpkiFromB64,
-} from "./subtleWeb";
-import { fetchPeerPublicSpki } from "./identity";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { HKDF_DM } from "./constants";
+import { fetchPeerPublicSpki } from "./identity";
+import {
+    aesGcmDecryptUtf8,
+    aesGcmEncryptUtf8,
+    deriveAesGcmKeyFromEcdh,
+    importPublicSpkiFromB64,
+} from "./subtleWeb";
+import type { E2eeBroadcastV1 } from "./types";
 
 export function dmRealtimeTopic(a: string, b: string): string {
   return `e2ee-dm:${[a, b].sort().join(":")}`;
@@ -20,8 +20,12 @@ export async function encryptDmPayload(
   myPrivate: CryptoKey,
   peerId: string,
   text: string,
+  opts?: { peerSpkiB64?: string },
 ): Promise<{ ivB64: string; ctB64: string; error: Error | null }> {
-  const { spki, error } = await fetchPeerPublicSpki(supabase, peerId);
+  const cached = opts?.peerSpkiB64?.trim();
+  const { spki, error } = cached
+    ? { spki: cached, error: null as null }
+    : await fetchPeerPublicSpki(supabase, peerId);
   if (error || !spki) return { ivB64: "", ctB64: "", error: error ?? new Error("Peer key") };
   try {
     const peerPub = await importPublicSpkiFromB64(spki);

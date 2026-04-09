@@ -41,6 +41,7 @@ export default function SettingsScreen() {
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
+  const decoyAlertsEnabled = useMMStore((s) => s.decoyAlertsEnabled);
   const [exportPhrase, setExportPhrase] = useState("");
   const teamMapSharedKeyHex = useMMStore((s) => s.teamMapSharedKeyHex);
   const setTeamMapSharedKeyHex = useMMStore((s) => s.setTeamMapSharedKeyHex);
@@ -180,6 +181,34 @@ export default function SettingsScreen() {
             <Text style={[styles.dimValue, { color: chrome.text }]}>{mapNightDimPercent}%</Text>
           </View>
         ) : null}
+      </SettingsSection>
+
+      <SettingsSection
+        title="Decoy email alerts"
+        subtitle="Off by default. When on, if secure chat sync fails while you still have a connection (for example an expired session or server policy rejection), the app can send one generic marketing-style email to your login address per failure episode — rotating mundane subjects, no product names or sync wording. This still creates email metadata; many teams leave it off and rely on the on-screen sync banner only.">
+        <View style={[styles.rowCard, { borderColor: chrome.tabIconDefault }]}>
+          <Text style={[styles.rowLabel, { color: chrome.text }]}>Decoy alerts</Text>
+          <Switch
+            value={decoyAlertsEnabled}
+            onValueChange={(v) => {
+              void (async () => {
+                if (!supabase || !profileId) {
+                  Alert.alert("Sign in", "Sign in to change this preference.");
+                  return;
+                }
+                const { error } = await supabase
+                  .from("mm_profiles")
+                  .update({ decoy_alerts_enabled: v })
+                  .eq("id", profileId);
+                if (error) {
+                  Alert.alert("Could not save", error.message);
+                  return;
+                }
+                useMMStore.setState({ decoyAlertsEnabled: v });
+              })();
+            }}
+          />
+        </View>
       </SettingsSection>
 
       <SettingsSection

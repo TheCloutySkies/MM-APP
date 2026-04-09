@@ -6,3 +6,6 @@ enabled = true
 
 [functions.mm-login]
 verify_jwt = false
+
+[functions.send-decoy-alert]
+verify_jwt = true

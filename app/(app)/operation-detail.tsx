@@ -15,8 +15,11 @@ import {
 import { DocumentDetailModal } from "@/components/common/DocumentDetailModal";
 import { AarModal } from "@/components/ops/AarModal";
 import { IntelReportModal } from "@/components/ops/IntelReportModal";
+import { MedevacNineLineModal } from "@/components/ops/MedevacNineLineModal";
 import { MissionPlanModal } from "@/components/ops/MissionPlanModal";
+import { RouteReconModal } from "@/components/ops/RouteReconModal";
 import { SitrepModal } from "@/components/ops/SitrepModal";
+import { SpotrepModal } from "@/components/ops/SpotrepModal";
 import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
 import Colors from "@/constants/Colors";
 import {
@@ -26,17 +29,23 @@ import {
     formatAarForDisplay,
     formatDocKindLabel,
     formatIntelReportForDisplay,
+    formatMedevacNineLineForDisplay,
     formatMissionForDisplay,
+    formatRouteReconForDisplay,
     formatSitrepForDisplay,
+    formatSpotrepForDisplay,
     formatTargetPackageForDisplay,
     previewOpsRow,
     tryDecryptUtf8WithKeys,
     type AarPayloadV1,
     type IntelReportPayloadV1,
+    type MedevacNineLinePayloadV1,
     type MissionPlanPayloadV1,
     type OperationHubPayloadV1,
     type OpsDocKind,
+    type RouteReconPayloadV1,
     type SitrepPayloadV1,
+    type SpotrepPayloadV1,
     type TargetPackagePayloadV1,
 } from "@/lib/opsReports";
 import { collectOpsDecryptCandidates, resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
@@ -99,6 +108,9 @@ export default function OperationDetailScreen() {
   const [showAar, setShowAar] = useState(false);
   const [showTarget, setShowTarget] = useState(false);
   const [showIntel, setShowIntel] = useState(false);
+  const [showSpotrep, setShowSpotrep] = useState(false);
+  const [showMedevac, setShowMedevac] = useState(false);
+  const [showRouteRecon, setShowRouteRecon] = useState(false);
   const [docDetail, setDocDetail] = useState<{
     title: string;
     body: string;
@@ -192,6 +204,12 @@ export default function OperationDetailScreen() {
         body = formatTargetPackageForDisplay(JSON.parse(json) as TargetPackagePayloadV1);
       } else if (row.doc_kind === "intel_report") {
         body = formatIntelReportForDisplay(JSON.parse(json) as IntelReportPayloadV1);
+      } else if (row.doc_kind === "spotrep") {
+        body = formatSpotrepForDisplay(JSON.parse(json) as SpotrepPayloadV1);
+      } else if (row.doc_kind === "medevac_nine_line") {
+        body = formatMedevacNineLineForDisplay(JSON.parse(json) as MedevacNineLinePayloadV1);
+      } else if (row.doc_kind === "route_recon") {
+        body = formatRouteReconForDisplay(JSON.parse(json) as RouteReconPayloadV1);
       }
       setDocDetail({
         title: displayTitle,
@@ -308,6 +326,15 @@ export default function OperationDetailScreen() {
             <Pressable style={[styles.bigBtn, styles.outlineBtn, { borderColor: p.tint }]} onPress={() => setShowIntel(true)}>
               <Text style={[styles.bigBtnTxOutline, { color: p.tint }]}>Intel report</Text>
             </Pressable>
+            <Pressable style={[styles.bigBtn, styles.outlineBtn, { borderColor: p.tint }]} onPress={() => setShowSpotrep(true)}>
+              <Text style={[styles.bigBtnTxOutline, { color: p.tint }]}>SPOTREP</Text>
+            </Pressable>
+            <Pressable style={[styles.bigBtn, styles.outlineBtn, { borderColor: p.tint }]} onPress={() => setShowMedevac(true)}>
+              <Text style={[styles.bigBtnTxOutline, { color: p.tint }]}>9-line MEDEVAC</Text>
+            </Pressable>
+            <Pressable style={[styles.bigBtn, styles.outlineBtn, { borderColor: p.tint }]} onPress={() => setShowRouteRecon(true)}>
+              <Text style={[styles.bigBtnTxOutline, { color: p.tint }]}>Route recon</Text>
+            </Pressable>
           </View>
         </ScrollView>
       ) : (
@@ -422,6 +449,39 @@ export default function OperationDetailScreen() {
       <IntelReportModal
         visible={showIntel}
         onClose={() => setShowIntel(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        operationId={opId}
+        onSaved={() => void refresh()}
+      />
+      <SpotrepModal
+        visible={showSpotrep}
+        onClose={() => setShowSpotrep(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        operationId={opId}
+        onSaved={() => void refresh()}
+      />
+      <MedevacNineLineModal
+        visible={showMedevac}
+        onClose={() => setShowMedevac(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        operationId={opId}
+        onSaved={() => void refresh()}
+      />
+      <RouteReconModal
+        visible={showRouteRecon}
+        onClose={() => setShowRouteRecon(false)}
         scheme={sch}
         supabase={supabase}
         profileId={profileId}

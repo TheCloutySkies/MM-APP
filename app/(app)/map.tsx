@@ -34,6 +34,7 @@ import {
 import type { GisDrawPalette, MeasurePreview } from "@/components/map/gisMapTypes";
 import type { MapBaseLayerId, MapPointerMode, MapUserLocation } from "@/components/map/mapTypes";
 import { TacticalPalette } from "@/constants/TacticalTheme";
+import { useActivityLogger } from "@/hooks/useActivityLogger";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { geocodeSearch } from "@/lib/geocode";
@@ -69,6 +70,7 @@ import {
     tacticPayloadToLayers,
     type TacCategoryId,
 } from "@/lib/mapMarkers";
+import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import {
     bboxAroundPoint,
     fetchNasaFirmsHotspots,
@@ -262,6 +264,12 @@ export default function MapScreen() {
     }
   }, [mainKey, decoyKey, vaultMode]);
 
+  const { logAction } = useActivityLogger();
+  const mapFocusMarkerId = useMMStore((s) => s.mapFocusMarkerId);
+  const setMapFocusMarkerId = useMMStore((s) => s.setMapFocusMarkerId);
+  const mgrsPickHandler = useMMStore((s) => s.mgrsPickHandler);
+  const setMgrsPickHandler = useMMStore((s) => s.setMgrsPickHandler);
+
   const [tacticalPins, setTacticalPins] = useState<MapPin[]>([]);
   const [tacticalPolylines, setTacticalPolylines] = useState<MapPolylineOverlay[]>([]);
   const [tacticalPolygons, setTacticalPolygons] = useState<MapPolygonOverlay[]>([]);
@@ -407,6 +415,31 @@ export default function MapScreen() {
     flySeq.current += 1;
     setFlyTo({ lat, lng, zoom, seq: flySeq.current });
   };
+
+  useEffect(() => {
+    if (!mapFocusMarkerId) return;
+    const id = mapFocusMarkerId;
+    const pin = tacticalPins.find((p) => p.id === id);
+    if (pin) {
+      flyToCoords(pin.lat, pin.lng, 14);
+      setSelectedPin(pin);
+      setMapFocusMarkerId(null);
+      return;
+    }
+    const line = tacticalPolylines.find((p) => p.id === id);
+    const lc = line?.coordinates[0];
+    if (lc) {
+      flyToCoords(lc.latitude, lc.longitude, 13);
+      setMapFocusMarkerId(null);
+      return;
+    }
+    const poly = tacticalPolygons.find((p) => p.id === id);
+    const pc = poly?.coordinates[0];
+    if (pc) {
+      flyToCoords(pc.latitude, pc.longitude, 12);
+      setMapFocusMarkerId(null);
+    }
+  }, [mapFocusMarkerId, tacticalPins, tacticalPolylines, tacticalPolygons, setMapFocusMarkerId]);
 
   const runHudSearch = async () => {
     const q = hudQuery.trim();
@@ -585,16 +618,21 @@ export default function MapScreen() {
     const creator = username?.trim() || "Operator";
     const payload = buildTacticalPayload(pick.geom, cat, pick.coordinates, creator, { staleHours: 48 });
     const encrypted = encryptUtf8(mapKey, JSON.stringify(payload), "mm-map-marker");
-    const { error } = await supabase.from("map_markers").insert({
-      profile_id: profileId,
-      encrypted_payload: encrypted,
-    });
+    const { data, error } = await supabase
+      .from("map_markers")
+      .insert({
+        profile_id: profileId,
+        encrypted_payload: encrypted,
+      })
+      .select("id")
+      .single();
     if (error) {
       Alert.alert("Map", error.message);
       return;
     }
     setCategoryPick(null);
     void loadMarkers();
+    if (data?.id) void logAction("MAP_PIN", data.id as string);
   };
 
   const onMapLongPress = (lat: number, lng: number) => {
@@ -987,6 +1025,27 @@ export default function MapScreen() {
         ? mgrsLabel
         : `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
 
+  const applyCrosshairMgrsToForm = () => {
+    if (!mgrsPickHandler) return;
+    if (!center) {
+      Alert.alert("Map", "Pan/ zoom until the crosshair sits on your point, then try again.");
+      return;
+    }
+    const grid = lngLatToMgrs(center.lat, center.lng, 5);
+    if (!grid.trim()) {
+      Alert.alert("Map", "Could not compute MGRS for the crosshair.");
+      return;
+    }
+    mgrsPickHandler(grid);
+    setMgrsPickHandler(null);
+    router.back();
+  };
+
+  const cancelMgrsPick = () => {
+    if (!mgrsPickHandler) return;
+    setMgrsPickHandler(null);
+  };
+
   const handleMapPress = (lat: number, lng: number) => {
     if (drawTool === "route" || drawTool === "zone" || pointDropMode) {
       onMapTap(lat, lng);
@@ -1347,6 +1406,42 @@ export default function MapScreen() {
         onToggleFmt={() => setCenterFmt((v) => (v === "latlng" ? "mgrs" : "latlng"))}
         stackBelowHudY={coordStackBelowHud}
       />
+
+      {mgrsPickHandler ? (
+        <View
+          pointerEvents="box-none"
+          style={{
+            position: "absolute",
+            top: insets.top + 10,
+            left: 12,
+            right: 12,
+            zIndex: 2000,
+            padding: 12,
+            borderRadius: 12,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: chrome.border,
+            backgroundColor: chrome.surface,
+            gap: 10,
+          }}>
+          <Text style={{ color: chrome.text, fontWeight: "900", fontSize: 14 }}>Location pick (reports)</Text>
+          <Text style={{ color: chrome.tabIconDefault, fontSize: 12, lineHeight: 17 }}>
+            Align the map crosshair, confirm MGRS in the crosshair widget, then apply. Cancel returns without changing
+            your form.
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            <Pressable
+              onPress={applyCrosshairMgrsToForm}
+              style={{ paddingVertical: 12, paddingHorizontal: 14, borderRadius: 10, backgroundColor: chrome.tint }}>
+              <Text style={{ color: onTintLabel, fontWeight: "900" }}>Apply crosshair MGRS</Text>
+            </Pressable>
+            <Pressable
+              onPress={cancelMgrsPick}
+              style={{ paddingVertical: 12, paddingHorizontal: 14, borderRadius: 10, borderWidth: 2, borderColor: chrome.border }}>
+              <Text style={{ color: chrome.text, fontWeight: "800" }}>Cancel pick</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {Platform.OS === "web" ? (
         <View

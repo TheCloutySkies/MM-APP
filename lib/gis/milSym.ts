@@ -1,7 +1,7 @@
 import { Symbol as MilSymbol } from "milsymbol";
 
 export type TacticalAffiliation = "friendly" | "hostile" | "neutral" | "unknown";
-export type TacticalUnitType = "infantry" | "medical" | "supply" | "unknown";
+export type TacticalUnitType = "infantry" | "medical" | "supply" | "vehicle" | "cache" | "unknown";
 
 /**
  * Maps friendly UI choices → MIL-STD-2525C-style symbol strings (milsymbol / Spatial Illusions).
@@ -17,6 +17,10 @@ export function tacticalChoicesToSIDC(aff: TacticalAffiliation, unit: TacticalUn
     case "medical":
       return `${base}CEM---***G`;
     case "supply":
+      return `${base}CSA---***G`;
+    case "vehicle":
+      return `${base}UCA---***G`;
+    case "cache":
       return `${base}CSA---***G`;
     case "unknown":
     default:

@@ -40,6 +40,8 @@ type MMState = {
   username: string | null;
   /** False until user sets an operational callsign (mm_profiles.callsign_ok). */
   callsignOk: boolean;
+  /** Opt-in: mm_profiles.decoy_alerts_enabled — generic decoy email on server-side sync rejection only. */
+  decoyAlertsEnabled: boolean;
   /** How the current API token was obtained — affects which Supabase client we keep. */
   sessionSource: SessionSource | null;
   setupComplete: boolean;
@@ -66,6 +68,15 @@ type MMState = {
   teamMapSharedKeyHex: string | null;
   /** Device-local: completed post-unlock screening (main vault); grants shared ops key from env. */
   opsScreeningComplete: boolean;
+  /** Deep link: focus tactical map row id (map_markers) then clear. */
+  mapFocusMarkerId: string | null;
+  /** Deep link: open vault private object by vault_objects.id then clear. */
+  vaultFocusObjectId: string | null;
+  /**
+   * When set, tactical map shows “apply crosshair MGRS” and calls this once with a 5-digit grid string,
+   * then clears itself. Used by SPOTREP / MEDEVAC / route recon refine flows.
+   */
+  mgrsPickHandler: ((mgrs: string) => void) | null;
 };
 
 function layoutWidthPx(): number {
@@ -155,6 +166,9 @@ type MMActions = {
    * recover `sub` from the JWT, persist, and recreate the Supabase client when missing.
    */
   reconcileProfileIdFromJwt: () => Promise<void>;
+  setMapFocusMarkerId: (id: string | null) => void;
+  setVaultFocusObjectId: (id: string | null) => void;
+  setMgrsPickHandler: (fn: ((mgrs: string) => void) | null) => void;
 };
 
 async function persistSession(token: string, profileId: string, username: string) {
@@ -174,14 +188,18 @@ async function clearGoTrueSession() {
 async function loadMmProfileRow(
   supabase: SupabaseClient,
   profileId: string,
-): Promise<{ username: string; callsignOk: boolean } | null> {
+): Promise<{ username: string; callsignOk: boolean; decoyAlertsEnabled: boolean } | null> {
   const { data, error } = await supabase
     .from("mm_profiles")
-    .select("username, callsign_ok")
+    .select("username, callsign_ok, decoy_alerts_enabled")
     .eq("id", profileId)
     .maybeSingle();
   if (error || !data?.username) return null;
-  return { username: data.username as string, callsignOk: Boolean(data.callsign_ok) };
+  return {
+    username: data.username as string,
+    callsignOk: Boolean(data.callsign_ok),
+    decoyAlertsEnabled: Boolean(data.decoy_alerts_enabled),
+  };
 }
 
 /** Match DB trigger placeholder: pending- + first 12 hex chars of id (no dashes). */
@@ -196,7 +214,7 @@ function pendingUsernameForAuthUser(profileId: string): string {
 async function ensureMmProfileRowForAuth(
   supabase: SupabaseClient,
   profileId: string,
-): Promise<{ username: string; callsignOk: boolean } | null> {
+): Promise<{ username: string; callsignOk: boolean; decoyAlertsEnabled: boolean } | null> {
   const existing = await loadMmProfileRow(supabase, profileId);
   if (existing) return existing;
 
@@ -249,6 +267,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   profileId: null,
   username: null,
   callsignOk: true,
+  decoyAlertsEnabled: false,
   sessionSource: null,
   setupComplete: false,
   vaultMode: null,
@@ -264,8 +283,15 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   mapNightDimPercent: MAP_NIGHT_DIM.def,
   teamMapSharedKeyHex: null,
   opsScreeningComplete: false,
+  mapFocusMarkerId: null,
+  vaultFocusObjectId: null,
+  mgrsPickHandler: null,
 
   setSupabaseClient: (c) => set({ supabase: c }),
+
+  setMapFocusMarkerId: (id) => set({ mapFocusMarkerId: id }),
+  setVaultFocusObjectId: (id) => set({ vaultFocusObjectId: id }),
+  setMgrsPickHandler: (fn) => set({ mgrsPickHandler: fn }),
 
   completeOpsScreening: async () => {
     await get().setTeamMapSharedKeyHex(SCREENING_REWARD_TEAM_KEY_HEX);
@@ -377,6 +403,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     let profileId: string | null = null;
     let username: string | null = null;
     let callsignOk = true;
+    let decoyAlertsEnabled = false;
     let sessionSource: SessionSource | null = null;
     let supabase: SupabaseClient | null = null;
 
@@ -394,6 +421,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
         if (row) {
           username = row.username;
           callsignOk = row.callsignOk;
+          decoyAlertsEnabled = row.decoyAlertsEnabled;
         } else {
           username = session.user.email ?? session.user.id;
           callsignOk = false;
@@ -421,6 +449,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
         if (row) {
           username = row.username;
           callsignOk = row.callsignOk;
+          decoyAlertsEnabled = row.decoyAlertsEnabled;
           await persistSession(token, profileId, username);
         }
       }
@@ -453,6 +482,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       profileId,
       username,
       callsignOk,
+      decoyAlertsEnabled,
       sessionSource,
       setupComplete: setupDone,
       supabase,
@@ -465,6 +495,9 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       mapNightDimPercent,
       teamMapSharedKeyHex,
       opsScreeningComplete,
+      mapFocusMarkerId: null,
+      vaultFocusObjectId: null,
+      mgrsPickHandler: null,
     });
   },
 
@@ -475,7 +508,11 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     if (!row) return;
     const tok = get().accessToken;
     if (tok) await persistSession(tok, profileId, row.username);
-    set({ username: row.username, callsignOk: row.callsignOk });
+    set({
+      username: row.username,
+      callsignOk: row.callsignOk,
+      decoyAlertsEnabled: row.decoyAlertsEnabled,
+    });
   },
 
   loadDesktopPref: async () => {
@@ -532,6 +569,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       source === "auth" ? getAuthSupabase() : await createMMSupabase(loginToken);
     let displayUsername = username;
     let callsignOk = true;
+    let decoyAlertsEnabled = false;
     const row =
       source === "auth"
         ? (await loadMmProfileRow(supabase, profileId)) ??
@@ -540,6 +578,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     if (row) {
       displayUsername = row.username;
       callsignOk = row.callsignOk;
+      decoyAlertsEnabled = row.decoyAlertsEnabled;
       await persistSession(loginToken, profileId, displayUsername);
     } else if (source === "auth") {
       callsignOk = false;
@@ -549,6 +588,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       profileId,
       username: displayUsername,
       callsignOk,
+      decoyAlertsEnabled,
       sessionSource: source,
       supabase,
     });
@@ -565,12 +605,16 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       profileId: null,
       username: null,
       callsignOk: true,
+      decoyAlertsEnabled: false,
       sessionSource: null,
       vaultMode: null,
       mainVaultKey: null,
       decoyVaultKey: null,
       supabase: null,
       setupComplete: setupDone,
+      mapFocusMarkerId: null,
+      vaultFocusObjectId: null,
+      mgrsPickHandler: null,
     });
   },
 
@@ -581,6 +625,9 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       vaultMode: null,
       mainVaultKey: null,
       decoyVaultKey: null,
+      mapFocusMarkerId: null,
+      vaultFocusObjectId: null,
+      mgrsPickHandler: null,
     });
   },
 
@@ -594,6 +641,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       profileId: null,
       username: null,
       callsignOk: true,
+      decoyAlertsEnabled: false,
       sessionSource: null,
       setupComplete: false,
       vaultMode: null,
@@ -602,6 +650,9 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       supabase: null,
       teamMapSharedKeyHex: null,
       opsScreeningComplete: false,
+      mapFocusMarkerId: null,
+      vaultFocusObjectId: null,
+      mgrsPickHandler: null,
     });
   },
 

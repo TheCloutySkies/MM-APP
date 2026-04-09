@@ -2,7 +2,7 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import {
     Alert,
     FlatList,
@@ -21,6 +21,7 @@ import {
 import { PanicButton } from "@/components/PanicButton";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
+import { useActivityLogger } from "@/hooks/useActivityLogger";
 import { aes256GcmDecrypt, aes256GcmEncrypt, decryptUtf8, encryptUtf8, type AeadBundle } from "@/lib/crypto/aesGcm";
 import { utf8, utf8decode } from "@/lib/crypto/bytes";
 import { runCloutVisionPipeline } from "@/lib/media/cloutVision";
@@ -36,15 +37,21 @@ import {
     VAULT_FOLDER_NAME_AAD,
     formatAarForDisplay,
     formatIntelReportForDisplay,
+    formatMedevacNineLineForDisplay,
     formatMissionForDisplay,
+    formatRouteReconForDisplay,
     formatSitrepForDisplay,
+    formatSpotrepForDisplay,
     formatTargetPackageForDisplay,
     previewOpsRow,
     type AarPayloadV1,
     type IntelReportPayloadV1,
+    type MedevacNineLinePayloadV1,
     type MissionPlanPayloadV1,
     type OpsDocKind,
+    type RouteReconPayloadV1,
     type SitrepPayloadV1,
+    type SpotrepPayloadV1,
     type TargetPackagePayloadV1,
 } from "@/lib/opsReports";
 import {
@@ -88,6 +95,16 @@ function sectionTitle(s: VaultSection): string {
       return "SITREPs";
     case "aar":
       return "After action";
+    case "target_package":
+      return "Target packages";
+    case "intel_report":
+      return "Intel reports";
+    case "spotrep":
+      return "SPOTREPs";
+    case "medevac_nine_line":
+      return "9-line MEDEVAC";
+    case "route_recon":
+      return "Route recon";
     default:
       return s;
   }
@@ -103,6 +120,16 @@ function sectionIcon(s: VaultSection): ComponentProps<typeof FontAwesome>["name"
       return "rss";
     case "aar":
       return "clipboard";
+    case "target_package":
+      return "crosshairs";
+    case "intel_report":
+      return "eye";
+    case "spotrep":
+      return "binoculars";
+    case "medevac_nine_line":
+      return "ambulance";
+    case "route_recon":
+      return "road";
     default:
       return "file";
   }
@@ -114,6 +141,10 @@ export default function VaultScreen() {
   const p = Colors[scheme];
   const { width: windowW } = useWindowDimensions();
   const isWideLayout = windowW >= 720;
+  /** Wide desktop only: user can collapse the 200px labeled rail to a 56px icon rail. */
+  const [driveSidebarMinimized, setDriveSidebarMinimized] = useState(false);
+  const sidebarLabelsVisible = isWideLayout && !driveSidebarMinimized;
+  const driveSidebarWidth = sidebarLabelsVisible ? 200 : 56;
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const vaultMode = useMMStore((s) => s.vaultMode);
@@ -129,6 +160,10 @@ export default function VaultScreen() {
       return null;
     }
   }, [mainKey, decoyKey, vaultMode]);
+
+  const { logAction } = useActivityLogger();
+  const vaultFocusObjectId = useMMStore((s) => s.vaultFocusObjectId);
+  const setVaultFocusObjectId = useMMStore((s) => s.setVaultFocusObjectId);
 
   const [section, setSection] = useState<VaultSection>("private");
   const [rows, setRows] = useState<VaultObjectRow[]>([]);
@@ -308,12 +343,17 @@ export default function VaultScreen() {
       Alert.alert("Upload", upErr.message);
       return;
     }
-    const { error: rowErr } = await supabase.from("vault_objects").insert({
-      owner_id: profileId,
-      storage_path: path,
-      folder_id: section === "private" ? selectedFolderId : null,
-    });
+    const { data: ins, error: rowErr } = await supabase
+      .from("vault_objects")
+      .insert({
+        owner_id: profileId,
+        storage_path: path,
+        folder_id: section === "private" ? selectedFolderId : null,
+      })
+      .select("id")
+      .single();
     if (rowErr) Alert.alert("Vault row", rowErr.message);
+    else if (ins?.id) void logAction("VAULT_FILE", ins.id as string);
     void refreshPrivate();
   };
 
@@ -392,6 +432,19 @@ export default function VaultScreen() {
     }
   };
 
+  useEffect(() => {
+    if (!vaultFocusObjectId) return;
+    setSection("private");
+  }, [vaultFocusObjectId]);
+
+  useEffect(() => {
+    if (!vaultFocusObjectId || section !== "private") return;
+    const hit = rows.find((r) => r.id === vaultFocusObjectId);
+    if (!hit) return;
+    setVaultFocusObjectId(null);
+    void openPrivateRow(hit);
+  }, [vaultFocusObjectId, section, rows, setVaultFocusObjectId]);
+
   const openOpsRow = (row: OpsReportRow) => {
     if (!mapKey || mapKey.length !== 32) {
       Alert.alert(
@@ -418,6 +471,12 @@ export default function VaultScreen() {
         body = formatTargetPackageForDisplay(JSON.parse(json) as TargetPackagePayloadV1);
       } else if (row.doc_kind === "intel_report") {
         body = formatIntelReportForDisplay(JSON.parse(json) as IntelReportPayloadV1);
+      } else if (row.doc_kind === "spotrep") {
+        body = formatSpotrepForDisplay(JSON.parse(json) as SpotrepPayloadV1);
+      } else if (row.doc_kind === "medevac_nine_line") {
+        body = formatMedevacNineLineForDisplay(JSON.parse(json) as MedevacNineLinePayloadV1);
+      } else if (row.doc_kind === "route_recon") {
+        body = formatRouteReconForDisplay(JSON.parse(json) as RouteReconPayloadV1);
       } else {
         body = json;
       }
@@ -526,6 +585,29 @@ export default function VaultScreen() {
   const surface = TacticalPalette.elevated;
   const panelBg = TacticalPalette.panel;
 
+  const opsKindIcon = (kind: OpsDocKind): ComponentProps<typeof FontAwesome>["name"] => {
+    switch (kind) {
+      case "mission_plan":
+        return "map-marker";
+      case "sitrep":
+        return "bullhorn";
+      case "aar":
+        return "history";
+      case "target_package":
+        return "crosshairs";
+      case "intel_report":
+        return "eye";
+      case "spotrep":
+        return "binoculars";
+      case "medevac_nine_line":
+        return "ambulance";
+      case "route_recon":
+        return "road";
+      default:
+        return "file";
+    }
+  };
+
   const quickAccessPrivate = useMemo(() => privateFiltered.slice(0, 4), [privateFiltered]);
   const quickAccessOps = useMemo(() => opsFiltered.slice(0, 4), [opsFiltered]);
 
@@ -551,9 +633,9 @@ export default function VaultScreen() {
           name={sectionIcon(id)}
           size={18}
           color={active ? TacticalPalette.accent : TacticalPalette.boneMuted}
-          style={{ marginRight: isWideLayout ? 12 : 0 }}
+          style={{ marginRight: sidebarLabelsVisible ? 12 : 0 }}
         />
-        {isWideLayout ? (
+        {sidebarLabelsVisible ? (
           <Text style={{ color: active ? TacticalPalette.bone : TacticalPalette.boneMuted, fontWeight: "700", fontSize: 13 }} numberOfLines={1}>
             {label}
           </Text>
@@ -637,16 +719,7 @@ export default function VaultScreen() {
     ]
       .filter(Boolean)
       .join(" · ");
-    const icon: ComponentProps<typeof FontAwesome>["name"] =
-      item.doc_kind === "mission_plan"
-        ? "map-marker"
-        : item.doc_kind === "sitrep"
-          ? "bullhorn"
-          : item.doc_kind === "target_package"
-            ? "crosshairs"
-            : item.doc_kind === "intel_report"
-              ? "eye"
-              : "history";
+    const icon = opsKindIcon(item.doc_kind);
     return (
       <Pressable
         onPress={() => openOpsRow(item)}
@@ -684,16 +757,7 @@ export default function VaultScreen() {
       }
     }
     const disp = formatOpsVaultHeadline(head);
-    const icon: ComponentProps<typeof FontAwesome>["name"] =
-      item.doc_kind === "mission_plan"
-        ? "map-marker"
-        : item.doc_kind === "sitrep"
-          ? "bullhorn"
-          : item.doc_kind === "target_package"
-            ? "crosshairs"
-            : item.doc_kind === "intel_report"
-              ? "eye"
-              : "history";
+    const icon = opsKindIcon(item.doc_kind);
     return (
       <Pressable
         onPress={() => openOpsRow(item)}
@@ -792,17 +856,56 @@ export default function VaultScreen() {
           style={[
             styles.sidebar,
             {
-              width: isWideLayout ? 200 : 56,
+              width: driveSidebarWidth,
               borderRightWidth: StyleSheet.hairlineWidth,
               borderRightColor: borderM,
               backgroundColor: TacticalPalette.charcoal,
             },
           ]}>
-          {isWideLayout ? <Text style={styles.sidebarBrand}>Drive</Text> : null}
+          {isWideLayout ? (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: sidebarLabelsVisible ? "space-between" : "center",
+                paddingHorizontal: sidebarLabelsVisible ? 10 : 6,
+                paddingLeft: sidebarLabelsVisible ? 14 : 6,
+                paddingRight: 8,
+                marginBottom: sidebarLabelsVisible ? 6 : 10,
+              }}>
+              {sidebarLabelsVisible ? (
+                <Text style={[styles.sidebarBrand, { paddingHorizontal: 0, marginBottom: 0, flexShrink: 1 }]} numberOfLines={1}>
+                  Drive
+                </Text>
+              ) : null}
+              <Pressable
+                onPress={() => setDriveSidebarMinimized((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel={sidebarLabelsVisible ? "Collapse drive sidebar" : "Expand drive sidebar"}
+                hitSlop={8}
+                style={({ pressed }) => ({
+                  paddingVertical: 6,
+                  paddingHorizontal: sidebarLabelsVisible ? 8 : 10,
+                  borderRadius: 8,
+                  backgroundColor: pressed ? TacticalPalette.panel : "transparent",
+                })}>
+                <FontAwesome
+                  name={sidebarLabelsVisible ? "angle-double-left" : "angle-double-right"}
+                  size={18}
+                  color={TacticalPalette.boneMuted}
+                />
+              </Pressable>
+            </View>
+          ) : null}
           {sidebarNav("private", "My drive")}
           {sidebarNav("mission_plan", "Mission plans")}
           {sidebarNav("sitrep", "SITREPs")}
           {sidebarNav("aar", "After action")}
+          {sidebarNav("target_package", "Targets")}
+          {sidebarNav("intel_report", "Intel")}
+          {sidebarNav("spotrep", "SPOTREP")}
+          {sidebarNav("medevac_nine_line", "9-line MED")}
+          {sidebarNav("route_recon", "Route recon")}
           <Pressable
             onPress={() => setTeamHubOpen(true)}
             style={({ pressed }) => [
@@ -821,9 +924,9 @@ export default function VaultScreen() {
               name="users"
               size={18}
               color={TacticalPalette.coyote}
-              style={{ marginRight: isWideLayout ? 12 : 0 }}
+              style={{ marginRight: sidebarLabelsVisible ? 12 : 0 }}
             />
-            {isWideLayout ? (
+            {sidebarLabelsVisible ? (
               <Text
                 style={{ color: TacticalPalette.bone, fontWeight: "700", fontSize: 13 }}
                 numberOfLines={1}>
@@ -880,7 +983,7 @@ export default function VaultScreen() {
                     </Text>
                   </Pressable>
                 ))}
-              {isWideLayout ? (
+              {sidebarLabelsVisible ? (
                 <>
                   <TextInput
                     placeholder="New folder"

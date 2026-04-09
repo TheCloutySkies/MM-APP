@@ -3,6 +3,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 
 import {
+    markDmUnverified,
+    markDmVerified,
+    reconcileDmTrustWithServerKey,
+} from "@/lib/e2ee/dmTrustStore";
+import {
     adminInviteMemberToGlobal,
     initGlobalGroupForAdmin,
     isGroupAdmin,
@@ -10,10 +15,14 @@ import {
 } from "@/lib/e2ee/groupKeys";
 import {
     bootstrapIdentityOnDevice,
+    fetchPeerPublicSpki,
     hasLocalIdentity,
     unlockIdentityPrivateKey,
 } from "@/lib/e2ee/identity";
 import { appendOutbox, loadOutbox, replaceOutbox } from "@/lib/e2ee/localStore";
+import { flushOutboxSequential } from "@/lib/e2ee/outboxSync";
+import { setTeamGroupKeyBridge } from "@/lib/e2ee/teamGroupKeyBridge";
+import { formatSecurityPhrase, securityPhraseFromSpkiPair } from "@/lib/e2ee/securityWords";
 import type { E2eeBroadcastV1, E2eeChatMessage, E2eeEnvelopeRow } from "@/lib/e2ee/types";
 import { GLOBAL_GROUP_ID } from "@/lib/e2ee/types";
 import {
@@ -27,29 +36,29 @@ import {
 } from "@/lib/e2ee/wire";
 import { useMMStore } from "@/store/mmStore";
 
+function friendlyGroupKeyStatus(raw: string): string {
+  const m = raw.trim();
+  if (m.includes("No group key wrap") || m.includes("No group key wrap for you")) {
+    return "You don’t have team channel access yet. Ask an organizer to add you, then tap Refresh below.";
+  }
+  if (m.includes("Admin public key missing")) {
+    return "The team channel is still starting up. Try Refresh in a moment.";
+  }
+  if (m.includes("unwrap failed")) {
+    return "Couldn’t read the team key. Tap Refresh or sign out and back in.";
+  }
+  return m;
+}
+
 function newMsgId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-async function flushOutboxQueue(
-  supabase: NonNullable<ReturnType<typeof useMMStore.getState>["supabase"]>,
-  profileId: string,
-): Promise<void> {
-  const q = await loadOutbox();
-  if (!q.length) return;
-  const rows = q.map((x) => ({
-    sender_id: profileId,
-    recipient_id: x.payload.recipient_id,
-    group_id: x.payload.group_id,
-    iv: x.payload.iv,
-    ciphertext: x.payload.ciphertext,
-    client_msg_id: x.payload.client_msg_id,
-  }));
-  const { error } = await supabase.from("e2ee_comms_envelopes").insert(rows);
-  if (!error) await replaceOutbox([]);
-}
-
 export type CommsMode = "grp" | "dm";
+
+export type ChatDirectoryPeer = { id: string; username: string };
+
+export type DmTrustVisual = "ok" | "unverified" | "broken";
 
 export function useLiveComms() {
   const supabase = useMMStore((s) => s.supabase);
@@ -68,14 +77,30 @@ export function useLiveComms() {
   const [status, setStatus] = useState<string | null>(null);
   const [hasIdentityDevice, setHasIdentityDevice] = useState(false);
   const [invitePeerId, setInvitePeerId] = useState("");
+  /** True after team AES key is loaded (global mode can decrypt/send). */
+  const [groupChannelReady, setGroupChannelReady] = useState(false);
+  const [commsAdmin, setCommsAdmin] = useState(false);
   /** Global channel only: recent distinct sender_ids (ciphertext envelope metadata — no message content). */
   const [channelRoster, setChannelRoster] = useState<string[]>([]);
+  const [directoryPeers, setDirectoryPeers] = useState<ChatDirectoryPeer[]>([]);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
+  const [dmTrustVisual, setDmTrustVisual] = useState<DmTrustVisual>("unverified");
 
   const privateKeyRef = useRef<CryptoKey | null>(null);
   const groupKeyRef = useRef<Uint8Array | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const channelRef = useRef<RealtimeChannel | null>(null);
+  /** Broadcast channel websocket healthy (SUBSCRIBED). Falls back faster than navigator.onLine alone. */
+  const broadcastChannelReadyRef = useRef(false);
+  const outboxFlushLockRef = useRef(false);
+  /** One decoy email per “halt episode” until flush succeeds again. */
+  const decoySentThisHaltRef = useRef(false);
   const mySpkiRef = useRef<string | null>(null);
+
+  const decoyAlertsEnabled = useMMStore((s) => s.decoyAlertsEnabled);
+
+  const [outboxSyncHalted, setOutboxSyncHalted] = useState(false);
+  const [outboxSyncHaltKind, setOutboxSyncHaltKind] = useState<"network" | "server" | null>(null);
 
   useEffect(() => {
     if (!profileId || !webOk) return;
@@ -89,8 +114,45 @@ export function useLiveComms() {
       privateKeyRef.current = null;
       groupKeyRef.current = null;
       setUnlocked(false);
+      setGroupChannelReady(false);
+      setCommsAdmin(false);
+      setDirectoryPeers([]);
+      setDirectoryError(null);
+      setDmTrustVisual("unverified");
+      setOutboxSyncHalted(false);
+      setOutboxSyncHaltKind(null);
+      decoySentThisHaltRef.current = false;
+      setTeamGroupKeyBridge(null);
     }
   }, [vaultMode]);
+
+  const loadDirectory = useCallback(async () => {
+    if (!supabase) return;
+    setDirectoryError(null);
+    const { data, error } = await supabase.rpc("mm_list_chat_peers");
+    if (error) {
+      setDirectoryPeers([]);
+      setDirectoryError(error.message);
+      return;
+    }
+    const rows = (data ?? []) as { id: string; username: string }[];
+    setDirectoryPeers(rows.map((r) => ({ id: r.id, username: String(r.username ?? "").trim() || "member" })));
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!unlocked || !supabase || !webOk) return;
+    void loadDirectory();
+  }, [unlocked, supabase, webOk, loadDirectory]);
+
+  const usernameForPeerId = useCallback(
+    (id: string) => {
+      if (!id) return "Unknown";
+      if (id === profileId) return username ?? "You";
+      const hit = directoryPeers.find((p) => p.id === id);
+      return hit?.username ?? "Teammate";
+    },
+    [directoryPeers, profileId, username],
+  );
 
   const refreshMySpki = useCallback(async () => {
     if (!supabase || !profileId) return;
@@ -102,17 +164,106 @@ export function useLiveComms() {
     mySpkiRef.current = (data?.public_key_spki as string | undefined) ?? null;
   }, [supabase, profileId]);
 
+  useEffect(() => {
+    if (!unlocked || !webOk || !supabase || !profileId || !activePeerId || commsMode !== "dm") {
+      setDmTrustVisual("unverified");
+      return;
+    }
+    void (async () => {
+      const { spki, error } = await fetchPeerPublicSpki(supabase, activePeerId);
+      if (error || !spki) {
+        setDmTrustVisual("unverified");
+        return;
+      }
+      const r = await reconcileDmTrustWithServerKey(profileId, activePeerId, spki);
+      if (r === "broken") {
+        setDmTrustVisual("broken");
+        setStatus(
+          "This chat’s security words may have changed (new device or server update). Compare words again before trusting sensitive details.",
+        );
+      } else if (r === "ok") {
+        setDmTrustVisual("ok");
+      } else {
+        setDmTrustVisual("unverified");
+      }
+    })();
+  }, [unlocked, webOk, supabase, profileId, activePeerId, commsMode]);
+
   const syncGroupKey = useCallback(async () => {
     if (!supabase || !profileId || !privateKeyRef.current) return;
     const { groupKey, error } = await loadGlobalGroupKeyForMember(supabase, profileId, privateKeyRef.current);
     if (error) {
-      setStatus(error.message);
+      setGroupChannelReady(false);
       groupKeyRef.current = null;
+      setTeamGroupKeyBridge(null);
+      setStatus(friendlyGroupKeyStatus(error.message));
       return;
     }
     groupKeyRef.current = groupKey;
+    setTeamGroupKeyBridge(groupKey);
+    setGroupChannelReady(true);
     setStatus(null);
   }, [supabase, profileId]);
+
+  const flushOutboxWithUi = useCallback(async () => {
+    if (!supabase || !profileId || outboxFlushLockRef.current) return;
+    outboxFlushLockRef.current = true;
+    try {
+      const result = await flushOutboxSequential(
+        supabase,
+        profileId,
+        loadOutbox,
+        replaceOutbox,
+        async (item) => {
+          const ch = channelRef.current;
+          if (!ch || !broadcastChannelReadyRef.current) return;
+          const kind = item.payload.group_id != null ? "grp" : "dm";
+          const payload = buildBroadcast(
+            kind,
+            profileId,
+            item.payload.iv,
+            item.payload.ciphertext,
+            item.payload.client_msg_id,
+          );
+          await ch.send({ type: "broadcast", event: "e2ee", payload });
+        },
+      );
+      if (result.sentClientMsgIds.length) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.mine && result.sentClientMsgIds.includes(m.clientMsgId)
+              ? { ...m, deliveryStatus: "sent" as const }
+              : m,
+          ),
+        );
+      }
+
+      if (result.haltedWithError) {
+        const kind: "network" | "server" =
+          result.haltCategory === "network" ? "network" : "server";
+        setOutboxSyncHalted(true);
+        setOutboxSyncHaltKind(kind);
+        if (
+          kind === "server" &&
+          decoyAlertsEnabled &&
+          !decoySentThisHaltRef.current
+        ) {
+          decoySentThisHaltRef.current = true;
+          void supabase.functions.invoke("send-decoy-alert").catch(() => {});
+        }
+      } else {
+        setOutboxSyncHalted(false);
+        setOutboxSyncHaltKind(null);
+        decoySentThisHaltRef.current = false;
+      }
+    } finally {
+      outboxFlushLockRef.current = false;
+    }
+  }, [supabase, profileId, decoyAlertsEnabled]);
+
+  const retryOutboxSync = useCallback(async () => {
+    await flushOutboxWithUi();
+  }, [flushOutboxWithUi]);
 
   const ingestPayload = useCallback(
     async (payload: E2eeBroadcastV1) => {
@@ -289,7 +440,7 @@ export function useLiveComms() {
   useEffect(() => {
     if (!unlocked || !webOk) return;
     void loadHistory();
-  }, [unlocked, webOk, loadHistory]);
+  }, [unlocked, webOk, loadHistory, groupChannelReady]);
 
   useEffect(() => {
     if (!supabase || !profileId || !unlocked || !webOk) {
@@ -302,13 +453,16 @@ export function useLiveComms() {
       commsMode === "grp" ? GROUP_REALTIME_TOPIC : activePeerId ? dmRealtimeTopic(profileId, activePeerId) : null;
 
     if (!topic) {
+      broadcastChannelReadyRef.current = false;
       return () => {
         const prev = channelRef.current;
         if (prev) void supabase.removeChannel(prev);
         channelRef.current = null;
+        broadcastChannelReadyRef.current = false;
       };
     }
 
+    broadcastChannelReadyRef.current = false;
     const ch = supabase.channel(topic, { config: { broadcast: { self: true } } });
     ch.on("broadcast", { event: "e2ee" }, ({ payload }) => {
       const p = payload as E2eeBroadcastV1;
@@ -317,14 +471,21 @@ export function useLiveComms() {
     });
 
     void ch.subscribe((status) => {
-      if (status === "SUBSCRIBED") channelRef.current = ch;
+      if (status === "SUBSCRIBED") {
+        broadcastChannelReadyRef.current = true;
+        channelRef.current = ch;
+        void flushOutboxWithUi();
+      } else {
+        broadcastChannelReadyRef.current = false;
+      }
     });
 
     return () => {
+      broadcastChannelReadyRef.current = false;
       void supabase.removeChannel(ch);
       channelRef.current = null;
     };
-  }, [supabase, profileId, unlocked, webOk, commsMode, activePeerId, ingestPayload]);
+  }, [supabase, profileId, unlocked, webOk, commsMode, activePeerId, ingestPayload, flushOutboxWithUi]);
 
   /** Live envelope sync: new rows appear in history without reload (RLS-scoped). Requires table in supabase_realtime publication. */
   useEffect(() => {
@@ -423,22 +584,58 @@ export function useLiveComms() {
   useEffect(() => {
     if (!webOk || typeof window === "undefined") return;
     const onOnline = () => {
-      if (supabase && profileId) void flushOutboxQueue(supabase, profileId);
+      void flushOutboxWithUi();
     };
     window.addEventListener("online", onOnline);
     return () => window.removeEventListener("online", onOnline);
-  }, [supabase, profileId, webOk]);
+  }, [flushOutboxWithUi, webOk]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active" && supabase && profileId && webOk) void flushOutboxQueue(supabase, profileId);
+      if (s === "active" && webOk) void flushOutboxWithUi();
     });
     return () => sub.remove();
-  }, [supabase, profileId, webOk]);
+  }, [flushOutboxWithUi, webOk]);
+
+  const createGlobalChannel = useCallback(async () => {
+    if (!supabase || !profileId || !privateKeyRef.current) return;
+    const spki = mySpkiRef.current;
+    if (!spki) {
+      setStatus("Missing public key record");
+      return;
+    }
+    const { groupKey, error } = await initGlobalGroupForAdmin(supabase, profileId, privateKeyRef.current, spki);
+    if (error?.message === "GLOBAL_EXISTS" || error?.message.includes("duplicate") || error?.message.includes("unique")) {
+      await syncGroupKey();
+      return;
+    }
+    if (error) {
+      setStatus(error.message);
+      return;
+    }
+    groupKeyRef.current = groupKey;
+    setTeamGroupKeyBridge(groupKey);
+    setGroupChannelReady(true);
+    setStatus(null);
+  }, [supabase, profileId, syncGroupKey]);
+
+  const retryTeamChannel = useCallback(async () => {
+    if (!supabase || !profileId) return;
+    setStatus(null);
+    await syncGroupKey();
+    if (!groupKeyRef.current) {
+      await createGlobalChannel();
+    }
+    if (!groupKeyRef.current) {
+      setStatus(
+        "Still no team access. Ask an organizer to add you to the channel, or wait a minute and tap Refresh again.",
+      );
+    }
+  }, [supabase, profileId, syncGroupKey, createGlobalChannel]);
 
   const unlockComms = useCallback(async () => {
     if (!profileId || !panelPin.trim()) {
-      setStatus("Enter your vault PIN.");
+      setStatus("Enter the same PIN you use for the vault.");
       return;
     }
     setStatus(null);
@@ -451,12 +648,21 @@ export function useLiveComms() {
     setPanelPin("");
     await refreshMySpki();
     await syncGroupKey();
+    if (!groupKeyRef.current) {
+      await createGlobalChannel();
+    }
+    if (supabase && profileId) {
+      const admin = await isGroupAdmin(supabase, profileId);
+      setCommsAdmin(admin);
+    }
+    await loadDirectory();
     setUnlocked(true);
-  }, [profileId, panelPin, refreshMySpki, syncGroupKey]);
+    void flushOutboxWithUi();
+  }, [profileId, panelPin, refreshMySpki, syncGroupKey, createGlobalChannel, supabase, loadDirectory, flushOutboxWithUi]);
 
   const createIdentity = useCallback(async () => {
     if (!supabase || !profileId || !panelPin.trim()) {
-      setStatus("PIN required to wrap private key.");
+      setStatus("Enter your vault PIN to continue.");
       return;
     }
     setStatus(null);
@@ -468,27 +674,6 @@ export function useLiveComms() {
     setHasIdentityDevice(true);
     await unlockComms();
   }, [supabase, profileId, panelPin, unlockComms]);
-
-  const createGlobalChannel = useCallback(async () => {
-    if (!supabase || !profileId || !privateKeyRef.current) return;
-    const spki = mySpkiRef.current;
-    if (!spki) {
-      setStatus("Missing public key record");
-      return;
-    }
-    const { groupKey, error } = await initGlobalGroupForAdmin(supabase, profileId, privateKeyRef.current, spki);
-    if (error?.message === "GLOBAL_EXISTS" || error?.message.includes("duplicate") || error?.message.includes("unique")) {
-      await syncGroupKey();
-      setStatus(null);
-      return;
-    }
-    if (error) {
-      setStatus(error.message);
-      return;
-    }
-    groupKeyRef.current = groupKey;
-    setStatus("Global channel ready.");
-  }, [supabase, profileId, syncGroupKey]);
 
   const inviteToGlobal = useCallback(async () => {
     if (!supabase || !profileId || !privateKeyRef.current || !groupKeyRef.current) return;
@@ -507,7 +692,10 @@ export function useLiveComms() {
       groupKeyRef.current,
     );
     if (error) setStatus(error.message);
-    else setStatus("Invite wrap stored.");
+    else {
+      setStatus("Invite wrap stored.");
+      setInvitePeerId("");
+    }
   }, [supabase, profileId, invitePeerId]);
 
   const applyPeer = useCallback(() => {
@@ -517,20 +705,90 @@ export function useLiveComms() {
     setPeerInput("");
   }, [peerInput]);
 
-  const sendText = useCallback(
-    async (raw: string) => {
-      const text = raw.trim();
+  const openDmWith = useCallback((peerId: string) => {
+    if (!peerId || peerId === profileId) return;
+    setActivePeerId(peerId);
+    setCommsMode("dm");
+    setStatus(null);
+  }, [profileId]);
+
+  const buildVerifyPhraseForPeer = useCallback(
+    async (peerId: string): Promise<string | null> => {
+      if (!supabase || !profileId) return null;
+      let mine = mySpkiRef.current;
+      if (!mine) {
+        await refreshMySpki();
+        mine = mySpkiRef.current;
+      }
+      if (!mine) return null;
+      const { spki, error } = await fetchPeerPublicSpki(supabase, peerId);
+      if (error || !spki) return null;
+      const words = await securityPhraseFromSpkiPair(mine, spki);
+      return formatSecurityPhrase(words);
+    },
+    [supabase, profileId, refreshMySpki],
+  );
+
+  const applyVerifiedForActiveDm = useCallback(
+    async (peerId: string, verified: boolean) => {
+      if (!supabase || !profileId) return;
+      const { spki, error } = await fetchPeerPublicSpki(supabase, peerId);
+      if (error || !spki) return;
+      if (verified) {
+        await markDmVerified(profileId, peerId, spki);
+        setDmTrustVisual("ok");
+      } else {
+        await markDmUnverified(profileId, peerId, spki);
+        setDmTrustVisual("unverified");
+      }
+    },
+    [supabase, profileId],
+  );
+
+  const sendChatPlaintext = useCallback(
+    async (text: string) => {
       if (!text || !supabase || !profileId || !privateKeyRef.current || !unlocked) return;
       const clientMsgId = newMsgId();
+      const netOffline =
+        typeof navigator !== "undefined" &&
+        typeof navigator.onLine === "boolean" &&
+        navigator.onLine === false;
+      /** Realtime drops before `navigator.onLine` — only gate on channel when web live comms is active. */
+      const realtimeNotReady = webOk && !broadcastChannelReadyRef.current;
+      const queueOutbound = netOffline || realtimeNotReady;
 
       if (commsMode === "dm") {
         if (!activePeerId) {
-          setStatus("Pick a DM peer (UUID).");
+          setStatus("Tap New message and choose a teammate.");
           return;
         }
-        const enc = await encryptDmPayload(supabase, privateKeyRef.current, activePeerId, text);
+        const { spki: peerSpki, error: peerSpkiErr } = await fetchPeerPublicSpki(supabase, activePeerId);
+        if (peerSpkiErr || !peerSpki) {
+          setStatus(
+            "This contact hasn’t opened team chat on a browser yet, or they’re offline. They need one web sign-in so keys sync.",
+          );
+          return;
+        }
+        const tr = await reconcileDmTrustWithServerKey(profileId, activePeerId, peerSpki);
+        if (tr === "broken") {
+          setDmTrustVisual("broken");
+          setStatus(
+            "Security words for this chat changed — compare Verify words before trusting sensitive information.",
+          );
+        } else if (tr === "ok") {
+          setDmTrustVisual("ok");
+        } else {
+          setDmTrustVisual("unverified");
+        }
+        const enc = await encryptDmPayload(supabase, privateKeyRef.current, activePeerId, text, {
+          peerSpkiB64: peerSpki,
+        });
         if (enc.error) {
-          setStatus(enc.error.message);
+          setStatus(
+            enc.error.message.includes("Peer") || enc.error.message.includes("key")
+              ? "Couldn’t encrypt for this contact. Ask them to open Team chat once on the web."
+              : enc.error.message,
+          );
           return;
         }
         const payload = buildBroadcast("dm", profileId, enc.ivB64, enc.ctB64, clientMsgId);
@@ -541,14 +799,15 @@ export function useLiveComms() {
           plaintext: text,
           ts: payload.ts,
           mine: true,
+          deliveryStatus: queueOutbound ? "queued" : "pending",
         };
         setMessages((prev) => [...prev, optimistic]);
         seenRef.current.add(clientMsgId);
 
-        const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-        if (offline) {
+        if (queueOutbound) {
           await appendOutbox({
             v: 1,
+            queued_at: Date.now(),
             payload: {
               recipient_id: activePeerId,
               group_id: null,
@@ -560,7 +819,7 @@ export function useLiveComms() {
           return;
         }
 
-        await supabase.from("e2ee_comms_envelopes").insert({
+        const { error: insErr } = await supabase.from("e2ee_comms_envelopes").insert({
           sender_id: profileId,
           recipient_id: activePeerId,
           group_id: null,
@@ -568,7 +827,29 @@ export function useLiveComms() {
           ciphertext: enc.ctB64,
           client_msg_id: clientMsgId,
         });
-
+        if (insErr) {
+          await appendOutbox({
+            v: 1,
+            queued_at: Date.now(),
+            payload: {
+              recipient_id: activePeerId,
+              group_id: null,
+              iv: enc.ivB64,
+              ciphertext: enc.ctB64,
+              client_msg_id: clientMsgId,
+            },
+          });
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.clientMsgId === clientMsgId ? { ...m, deliveryStatus: "queued" as const } : m,
+            ),
+          );
+          setStatus("Couldn’t reach server; message queued to send when connected.");
+          return;
+        }
+        setMessages((prev) =>
+          prev.map((m) => (m.clientMsgId === clientMsgId ? { ...m, deliveryStatus: "sent" as const } : m)),
+        );
         const ch = channelRef.current;
         if (ch) await ch.send({ type: "broadcast", event: "e2ee", payload });
         return;
@@ -576,7 +857,7 @@ export function useLiveComms() {
 
       const gk = groupKeyRef.current;
       if (!gk) {
-        setStatus("No group key — initialize or wait for admin wrap.");
+        setStatus("Team channel isn’t ready on this device yet. Tap Refresh above or wait for access.");
         return;
       }
       const enc = await encryptGroupPayload(gk, text);
@@ -588,14 +869,15 @@ export function useLiveComms() {
         plaintext: text,
         ts: payload.ts,
         mine: true,
+        deliveryStatus: queueOutbound ? "queued" : "pending",
       };
       setMessages((prev) => [...prev, optimistic]);
       seenRef.current.add(clientMsgId);
 
-      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-      if (offline) {
+      if (queueOutbound) {
         await appendOutbox({
           v: 1,
+          queued_at: Date.now(),
           payload: {
             recipient_id: null,
             group_id: GLOBAL_GROUP_ID,
@@ -607,7 +889,7 @@ export function useLiveComms() {
         return;
       }
 
-      await supabase.from("e2ee_comms_envelopes").insert({
+      const { error: grpInsErr } = await supabase.from("e2ee_comms_envelopes").insert({
         sender_id: profileId,
         recipient_id: null,
         group_id: GLOBAL_GROUP_ID,
@@ -615,11 +897,42 @@ export function useLiveComms() {
         ciphertext: enc.ctB64,
         client_msg_id: clientMsgId,
       });
-
+      if (grpInsErr) {
+        await appendOutbox({
+          v: 1,
+          queued_at: Date.now(),
+          payload: {
+            recipient_id: null,
+            group_id: GLOBAL_GROUP_ID,
+            iv: enc.ivB64,
+            ciphertext: enc.ctB64,
+            client_msg_id: clientMsgId,
+          },
+        });
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.clientMsgId === clientMsgId ? { ...m, deliveryStatus: "queued" as const } : m,
+          ),
+        );
+        setStatus("Couldn’t reach server; message queued to send when connected.");
+        return;
+      }
+      setMessages((prev) =>
+        prev.map((m) => (m.clientMsgId === clientMsgId ? { ...m, deliveryStatus: "sent" as const } : m)),
+      );
       const ch = channelRef.current;
       if (ch) await ch.send({ type: "broadcast", event: "e2ee", payload });
     },
-    [supabase, profileId, unlocked, commsMode, activePeerId],
+    [supabase, profileId, unlocked, commsMode, activePeerId, webOk],
+  );
+
+  const sendText = useCallback(
+    async (raw: string) => {
+      const text = raw.trim();
+      if (!text) return;
+      await sendChatPlaintext(text);
+    },
+    [sendChatPlaintext],
   );
 
   return {
@@ -640,6 +953,8 @@ export function useLiveComms() {
     status,
     setStatus,
     sendText,
+    /** Send raw body (trimmed by caller); use for vault attachment references. */
+    sendMessageBody: sendChatPlaintext,
     username,
     profileId,
     createGlobalChannel,
@@ -648,5 +963,20 @@ export function useLiveComms() {
     inviteToGlobal,
     syncGroupKey,
     channelRoster,
+    groupChannelReady,
+    commsAdmin,
+    retryTeamChannel,
+    openDmWith,
+    directoryPeers,
+    directoryError,
+    refreshChatDirectory: loadDirectory,
+    usernameForPeerId,
+    dmTrustVisual,
+    buildVerifyPhraseForPeer,
+    applyVerifiedForActiveDm,
+    /** Local-only: outbox flush stopped on an error (network vs server classified in outboxSync). */
+    outboxSyncHalted,
+    outboxSyncHaltKind,
+    retryOutboxSync,
   };
 }

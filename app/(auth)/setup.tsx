@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import type { LayoutPreference } from "@/lib/layout/layoutPreference";
+import { bootstrapIdentityOnDevice } from "@/lib/e2ee/identity";
 import { syncCalendarPinsAfterSetup } from "@/lib/supabase/calendarProfile";
 import { updateProfileLayoutPreference } from "@/lib/supabase/profileLayout";
 import { useMMStore } from "@/store/mmStore";
@@ -86,6 +87,12 @@ export default function SetupScreen() {
             "Calendar sync",
             "Could not save calendar PIN verification to your profile. Calendar duress routing may be limited until you sign in online again.",
           );
+        }
+        if (Platform.OS === "web") {
+          const { error: msgKeyErr } = await bootstrapIdentityOnDevice(supabase, profileId, pinP);
+          if (msgKeyErr) {
+            console.warn("Team chat keys:", msgKeyErr.message);
+          }
         }
       }
       await setLayoutTriPreference(iface);

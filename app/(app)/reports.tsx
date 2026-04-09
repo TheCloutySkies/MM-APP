@@ -5,7 +5,10 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } 
 
 import { AarModal } from "@/components/ops/AarModal";
 import { IntelReportModal } from "@/components/ops/IntelReportModal";
+import { MedevacNineLineModal } from "@/components/ops/MedevacNineLineModal";
+import { RouteReconModal } from "@/components/ops/RouteReconModal";
 import { SitrepModal } from "@/components/ops/SitrepModal";
+import { SpotrepModal } from "@/components/ops/SpotrepModal";
 import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
 import { TacticalBlock } from "@/components/shell/TacticalBlock";
 import Colors from "@/constants/Colors";
@@ -37,6 +40,9 @@ export default function ReportsScreen() {
   const [showAarModal, setShowAarModal] = useState(false);
   const [showTargetModal, setShowTargetModal] = useState(false);
   const [showIntelModal, setShowIntelModal] = useState(false);
+  const [showSpotrepModal, setShowSpotrepModal] = useState(false);
+  const [showMedevacModal, setShowMedevacModal] = useState(false);
+  const [showRouteReconModal, setShowRouteReconModal] = useState(false);
 
   const needKey = () => {
     Alert.alert("Reports", "Encryption key unavailable. Unlock vault or set shared map key.");
@@ -67,6 +73,26 @@ export default function ReportsScreen() {
           </View>
         </Pressable>
 
+        <TacticalBlock title="Immediate & tactical" defaultOpen>
+          <View style={styles.reportRow}>
+            <Pressable
+              style={[styles.reportChip, { borderColor: p.tint }]}
+              onPress={() => (mapKey ? setShowSpotrepModal(true) : needKey())}>
+              <Text style={[styles.chipTx, { color: p.tint }]}>SPOTREP</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.reportChip, { borderColor: p.tint }]}
+              onPress={() => (mapKey ? setShowMedevacModal(true) : needKey())}>
+              <Text style={[styles.chipTx, { color: p.tint }]}>9-line MED</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.reportChip, { borderColor: p.tint }]}
+              onPress={() => (mapKey ? setShowRouteReconModal(true) : needKey())}>
+              <Text style={[styles.chipTx, { color: p.tint }]}>Route recon</Text>
+            </Pressable>
+          </View>
+        </TacticalBlock>
+
         <TacticalBlock title="New report" defaultOpen>
           <View style={styles.reportRow}>
             <Pressable
@@ -91,6 +117,24 @@ export default function ReportsScreen() {
             </Pressable>
           </View>
         </TacticalBlock>
+
+        <Pressable
+          onPress={() => router.push("/(app)/sand-table")}
+          accessibilityRole="button"
+          accessibilityLabel="Open Sand Table route creator overview"
+          style={{ marginTop: 8 }}>
+          <View style={[styles.missionsLink, { borderColor: TacticalPalette.accent, backgroundColor: TacticalPalette.elevated }]}>
+            <FontAwesome name="picture-o" size={18} color={TacticalPalette.accent} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.missionsLinkTx, { color: TacticalPalette.accent }]}>Sand Table Route Creator</Text>
+              <Text style={{ color: p.tabIconDefault, fontSize: 12, marginTop: 4, lineHeight: 17 }}>
+                Isolated fullscreen Sand Table on web (separate Leaflet from the global map). From Route recon you can export
+                encrypted GeoJSON + PNG into the report payload.
+              </Text>
+            </View>
+            <FontAwesome name="chevron-right" size={12} color={p.tabIconDefault} />
+          </View>
+        </Pressable>
       </ScrollView>
 
       <SitrepModal
@@ -126,6 +170,36 @@ export default function ReportsScreen() {
       <IntelReportModal
         visible={showIntelModal}
         onClose={() => setShowIntelModal(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        onSaved={() => {}}
+      />
+      <SpotrepModal
+        visible={showSpotrepModal}
+        onClose={() => setShowSpotrepModal(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        onSaved={() => {}}
+      />
+      <MedevacNineLineModal
+        visible={showMedevacModal}
+        onClose={() => setShowMedevacModal(false)}
+        scheme={sch}
+        supabase={supabase}
+        profileId={profileId}
+        username={username}
+        mapKey={mapKey}
+        onSaved={() => {}}
+      />
+      <RouteReconModal
+        visible={showRouteReconModal}
+        onClose={() => setShowRouteReconModal(false)}
         scheme={sch}
         supabase={supabase}
         profileId={profileId}
