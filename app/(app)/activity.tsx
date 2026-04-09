@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,6 +18,7 @@ import { decryptActivityPayloadJson } from "@/lib/activityLog/crypto";
 import type { ActivityLogPlainPayloadV1, ActivityLogRow } from "@/lib/activityLog/types";
 import { hasLocalIdentity, unlockIdentityPrivateKey } from "@/lib/e2ee/identity";
 import { loadGlobalGroupKeyForMember } from "@/lib/e2ee/groupKeys";
+import { isWebSubtleAvailable } from "@/lib/e2ee/subtleWeb";
 import { classifyVaultCredential } from "@/lib/vault/classifyVaultCredential";
 import { formatVaultListDate } from "@/lib/vaultNaming";
 import { useMMStore } from "@/store/mmStore";
@@ -118,8 +118,8 @@ export default function ActivityLogScreen() {
 
   const runGate = async () => {
     setGateError(null);
-    if (Platform.OS !== "web") {
-      setGateError("Activity audit decrypt runs in the browser (Web Crypto).");
+    if (!isWebSubtleAvailable()) {
+      setGateError("This device has no Web Crypto (`crypto.subtle`). Activity decrypt needs P-384 + AES-GCM support.");
       return;
     }
     if (!setupComplete) {
@@ -161,10 +161,13 @@ export default function ActivityLogScreen() {
       }
       const { groupKey, error: gErr } = await loadGlobalGroupKeyForMember(supabase, profileId, privateKey);
       if (gErr || !groupKey) {
-        setGateError(
-          gErr?.message ??
-            "No team channel key on this account yet. Open Team chat and tap Refresh, or ask an organizer to add you.",
-        );
+        const raw = gErr?.message ?? "";
+        const friendly =
+          /operation.specific|OperationError|unwrap failed/i.test(raw)
+            ? "Team key unwrap failed (wrong PIN, missing wrap, or OS crypto limit). Open Team chat, unlock with the same PIN, tap Refresh, then try again."
+            : raw ||
+              "No team channel key on this account yet. Open Team chat and tap Refresh, or ask an organizer to add you.";
+        setGateError(friendly);
         return;
       }
       setSessionTeamKey(groupKey);

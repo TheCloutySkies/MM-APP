@@ -137,9 +137,15 @@ function CoordWidget(props: {
   label: string;
   fmt: "latlng" | "mgrs";
   onToggleFmt: () => void;
-  /** Y coordinate (from screen top) for first placement — bottom of map search HUD + gap. */
-  stackBelowHudY: number;
+  /**
+   * `rail` — full-width strip above the map (saves canvas space). `overlay` — draggable floating chip
+   * (legacy).
+   */
+  variant?: "rail" | "overlay";
+  /** Overlay only: Y from screen top for first placement (below search HUD). */
+  stackBelowHudY?: number;
 }) {
+  const variant = props.variant ?? "rail";
   const { width: winW, height: winH } = useWindowDimensions();
   const posRef = useRef({ x: 12, y: 120 });
   const dragOrigin = useRef({ x: 0, y: 0 });
@@ -150,18 +156,20 @@ function CoordWidget(props: {
   const boxH = min ? COORD_WIDGET_H_MIN : COORD_WIDGET_H_EXPANDED;
   const boxW = min ? 220 : COORD_WIDGET_W;
 
-  /** One-time placement under the HUD, right-aligned — avoids overlap with search / layers. */
+  /** One-time placement under the HUD, right-aligned — overlay only. */
   useEffect(() => {
+    if (variant !== "overlay") return;
+    const belowY = props.stackBelowHudY ?? 120;
     if (positionedRef.current || winW < 48) return;
     positionedRef.current = true;
     const w = COORD_WIDGET_W;
     const h = COORD_WIDGET_H_EXPANDED;
-    const top = Math.max(props.stackBelowHudY, 12);
+    const top = Math.max(belowY, 12);
     const x = clamp(winW - w - 12, 8, Math.max(8, winW - w - 8));
     const y = clamp(top, 8, Math.max(8, winH - h - 8));
     posRef.current = { x, y };
     setPos({ ...posRef.current });
-  }, [winW, winH, props.stackBelowHudY]);
+  }, [variant, winW, winH, props.stackBelowHudY]);
 
   useEffect(() => {
     posRef.current = pos;
@@ -169,38 +177,51 @@ function CoordWidget(props: {
 
   const drag = useMemo(
     () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
-        onPanResponderGrant: () => {
-          dragOrigin.current = { x: posRef.current.x, y: posRef.current.y };
-        },
-        onPanResponderMove: (_, g) => {
-          const nx = clamp(dragOrigin.current.x + g.dx, 6, Math.max(6, winW - boxW - 6));
-          const ny = clamp(dragOrigin.current.y + g.dy, 6, Math.max(6, winH - boxH - 6));
-          setPos((prev) => ({ ...prev, x: nx, y: ny }));
-        },
-      }),
-    [winW, winH, boxW, boxH],
+      variant === "overlay"
+        ? PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
+            onPanResponderGrant: () => {
+              dragOrigin.current = { x: posRef.current.x, y: posRef.current.y };
+            },
+            onPanResponderMove: (_, g) => {
+              const nx = clamp(dragOrigin.current.x + g.dx, 6, Math.max(6, winW - boxW - 6));
+              const ny = clamp(dragOrigin.current.y + g.dy, 6, Math.max(6, winH - boxH - 6));
+              setPos((prev) => ({ ...prev, x: nx, y: ny }));
+            },
+          })
+        : null,
+    [variant, winW, winH, boxW, boxH],
   );
 
+  const outerStyle =
+    variant === "rail"
+      ? [
+          styles.coordRail,
+          {
+            borderColor: props.border,
+            backgroundColor: props.surface,
+            zIndex: 4,
+          },
+        ]
+      : [
+          styles.coordBox,
+          {
+            left: pos.x,
+            top: pos.y,
+            width: boxW,
+            height: boxH,
+            borderColor: props.border,
+            backgroundColor: props.surface,
+            zIndex: 1200,
+            elevation: 8,
+          },
+        ];
+
   return (
-    <View
-      style={[
-        styles.coordBox,
-        {
-          left: pos.x,
-          top: pos.y,
-          width: boxW,
-          height: boxH,
-          borderColor: props.border,
-          backgroundColor: props.surface,
-          zIndex: 1200,
-          elevation: 8,
-        },
-      ]}>
+    <View style={outerStyle}>
       <View
-        {...drag.panHandlers}
+        {...(drag ? drag.panHandlers : {})}
         style={[styles.coordInner, min ? styles.coordInnerMin : styles.coordInnerExpanded]}>
         {min ? (
           <>
@@ -1306,8 +1327,36 @@ export default function MapScreen() {
 
   const mapHudPadTop = Math.max(10, insets.top + 8);
   const coordStackBelowHud = mapHudPadTop + 54 + 10;
-  /** Match `CoordWidget` default expanded height so the collapsed Map tools FAB clears the crosshair panel. */
-  const mapToolsExpandFabTop = coordStackBelowHud + COORD_WIDGET_DEFAULT_EXPANDED_H + 12;
+  /** Padding above/below the coord rail + default expanded chip height — clears “Map tools” FAB under HUD. */
+  const MAP_COORD_RAIL_WRAP_PAD = 10;
+  const mapCoordRailReserve = MAP_COORD_RAIL_WRAP_PAD + COORD_WIDGET_DEFAULT_EXPANDED_H;
+  const mapToolsExpandFabTop = mapCoordRailReserve + coordStackBelowHud + 12;
+
+  const mapCoordReadout = (
+    <View
+      style={[
+        styles.mapCoordRail,
+        {
+          paddingTop: 6,
+          paddingBottom: 4,
+          paddingHorizontal: 10,
+          borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
+          backgroundColor: chrome.background,
+        },
+      ]}>
+      <CoordWidget
+        variant="rail"
+        tint={chrome.tint}
+        border={chrome.border}
+        surface={chrome.surface}
+        text={chrome.text}
+        textMuted={chrome.tabIconDefault}
+        label={centerLabel}
+        fmt={centerFmt}
+        onToggleFmt={() => setCenterFmt((v) => (v === "latlng" ? "mgrs" : "latlng"))}
+      />
+    </View>
+  );
 
   const mapNode = (
     <View style={{ flex: 1, minHeight: 0 }}>
@@ -1515,19 +1564,6 @@ export default function MapScreen() {
           </View>
         </View>
       </View>
-
-      {/* Draggable coordinate widget */}
-      <CoordWidget
-        tint={chrome.tint}
-        border={chrome.border}
-        surface={chrome.surface}
-        text={chrome.text}
-        textMuted={chrome.tabIconDefault}
-        label={centerLabel}
-        fmt={centerFmt}
-        onToggleFmt={() => setCenterFmt((v) => (v === "latlng" ? "mgrs" : "latlng"))}
-        stackBelowHudY={coordStackBelowHud}
-      />
 
       {mgrsPickHandler ? (
         <View
@@ -2301,6 +2337,7 @@ export default function MapScreen() {
       {dockToolsRight ? (
         <>
           <View style={styles.mapCol}>
+            {mapCoordReadout}
             <View style={styles.mapFill}>{mapNode}</View>
             {mapToolsDockCollapsed ? (
               <Pressable
@@ -2408,6 +2445,7 @@ export default function MapScreen() {
         </>
       ) : (
         <View style={styles.mobileMapStack}>
+          {mapCoordReadout}
           <View style={styles.mapFill}>{mapNode}</View>
           {selectedGisFeature ? (
             <MapGisFeaturePanel
@@ -2522,12 +2560,19 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     width: "100%" as const,
+    flexDirection: "column",
   },
   mapCol: {
     flex: 1,
     minHeight: 0,
     minWidth: 0,
     position: "relative",
+    flexDirection: "column",
+  },
+  mapCoordRail: {
+    flexShrink: 0,
+    alignSelf: "stretch",
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   mapDockExpandFab: {
     position: "absolute",
@@ -2813,6 +2858,15 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     overflow: "hidden",
     ...(Platform.OS === "web" ? { boxShadow: "0 2px 10px rgba(0,0,0,0.2)" } : { elevation: 6 }),
+  },
+  /** Full-width readout above the Leaflet canvas (same chrome as `coordBox`, not absolutely positioned). */
+  coordRail: {
+    alignSelf: "stretch",
+    width: "100%" as const,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    overflow: "hidden",
+    ...(Platform.OS === "web" ? { boxShadow: "0 2px 10px rgba(0,0,0,0.14)" } : { elevation: 3 }),
   },
   coordInner: {
     flex: 1,

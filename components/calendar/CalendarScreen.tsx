@@ -249,19 +249,41 @@ export function CalendarScreen() {
   const saveEvent = async () => {
     const key = getCalendarSessionKey();
     const { profileId: pid, supabase: sb } = useMMStore.getState();
-    if (!key || !calMode || !pid) return;
+    if (!key || !calMode) {
+      Alert.alert("Calendar", "Session expired. Lock and unlock the calendar with your PIN.");
+      return;
+    }
+    if (!pid) {
+      Alert.alert("Calendar", "Not signed in. Open the app and sign in, then try again.");
+      return;
+    }
+    const start = new Date(startIso);
+    const end = new Date(endIso);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+      Alert.alert("Calendar", "Start and end must be valid dates.");
+      return;
+    }
+    if (end.getTime() < start.getTime()) {
+      Alert.alert("Calendar", "End time must be after start.");
+      return;
+    }
     const plain: CalendarEventPlain = {
       v: 1,
       type: evtType,
       locationLabel: locLabel || undefined,
       lat: lat ?? undefined,
       lng: lng ?? undefined,
-      startIso: new Date(startIso).toISOString(),
-      endIso: new Date(endIso).toISOString(),
+      startIso: start.toISOString(),
+      endIso: end.toISOString(),
       description,
     };
     const { error } = await pushNewEvent(sb, pid, calMode, key, plain);
-    if (error) Alert.alert("Calendar", error);
+    if (error) {
+      Alert.alert(
+        "Calendar",
+        `${error}\n\nIf you are offline, the event was queued on this device and will sync when connected.`,
+      );
+    }
     setFormOpen(false);
     await reloadForMode(calMode);
   };

@@ -34,6 +34,7 @@ import {
     encryptGroupPayload,
     GROUP_REALTIME_TOPIC,
 } from "@/lib/e2ee/wire";
+import { isWebSubtleAvailable } from "@/lib/e2ee/subtleWeb";
 import { useMMStore } from "@/store/mmStore";
 
 function friendlyGroupKeyStatus(raw: string): string {
@@ -66,7 +67,10 @@ export function useLiveComms() {
   const username = useMMStore((s) => s.username);
   const vaultMode = useMMStore((s) => s.vaultMode);
 
+  /** Web-only affordances (e.g. image picker messaging). */
   const webOk = Platform.OS === "web";
+  /** P-384 / AES-GCM team chat — enabled on web and on native when `crypto.subtle` exists (Expo/RN). */
+  const cryptoOk = isWebSubtleAvailable();
 
   const [commsMode, setCommsMode] = useState<CommsMode>("grp");
   const [peerInput, setPeerInput] = useState("");
@@ -107,11 +111,11 @@ export function useLiveComms() {
   const [outboxSyncHaltKind, setOutboxSyncHaltKind] = useState<"network" | "server" | null>(null);
 
   useEffect(() => {
-    if (!profileId || !webOk) return;
+    if (!profileId || !cryptoOk) return;
     void (async () => {
       setHasIdentityDevice(await hasLocalIdentity(profileId));
     })();
-  }, [profileId, webOk]);
+  }, [profileId, cryptoOk]);
 
   useEffect(() => {
     if (vaultMode == null) {
@@ -144,9 +148,9 @@ export function useLiveComms() {
   }, [supabase]);
 
   useEffect(() => {
-    if (!unlocked || !supabase || !webOk) return;
+    if (!unlocked || !supabase || !cryptoOk) return;
     void loadDirectory();
-  }, [unlocked, supabase, webOk, loadDirectory]);
+  }, [unlocked, supabase, cryptoOk, loadDirectory]);
 
   const usernameForPeerId = useCallback(
     (id: string) => {
@@ -169,7 +173,7 @@ export function useLiveComms() {
   }, [supabase, profileId]);
 
   useEffect(() => {
-    if (!unlocked || !webOk || !supabase || !profileId || !activePeerId || commsMode !== "dm") {
+    if (!unlocked || !cryptoOk || !supabase || !profileId || !activePeerId || commsMode !== "dm") {
       setDmTrustVisual("unverified");
       return;
     }
@@ -191,7 +195,7 @@ export function useLiveComms() {
         setDmTrustVisual("unverified");
       }
     })();
-  }, [unlocked, webOk, supabase, profileId, activePeerId, commsMode]);
+  }, [unlocked, cryptoOk, supabase, profileId, activePeerId, commsMode]);
 
   const syncGroupKey = useCallback(async () => {
     if (!supabase || !profileId || !privateKeyRef.current) return;
@@ -442,12 +446,12 @@ export function useLiveComms() {
   }, [supabase, profileId, commsMode, activePeerId, applyEnvelopeRow]);
 
   useEffect(() => {
-    if (!unlocked || !webOk) return;
+    if (!unlocked || !cryptoOk) return;
     void loadHistory();
-  }, [unlocked, webOk, loadHistory, groupChannelReady]);
+  }, [unlocked, cryptoOk, loadHistory, groupChannelReady]);
 
   useEffect(() => {
-    if (!supabase || !profileId || !unlocked || !webOk) {
+    if (!supabase || !profileId || !unlocked || !cryptoOk) {
       return () => {
         channelRef.current = null;
       };
@@ -489,11 +493,11 @@ export function useLiveComms() {
       void supabase.removeChannel(ch);
       channelRef.current = null;
     };
-  }, [supabase, profileId, unlocked, webOk, commsMode, activePeerId, ingestPayload, flushOutboxWithUi]);
+  }, [supabase, profileId, unlocked, cryptoOk, commsMode, activePeerId, ingestPayload, flushOutboxWithUi]);
 
   /** Live envelope sync: new rows appear in history without reload (RLS-scoped). Requires table in supabase_realtime publication. */
   useEffect(() => {
-    if (!supabase || !profileId || !unlocked || !webOk) {
+    if (!supabase || !profileId || !unlocked || !cryptoOk) {
       return () => {};
     }
 
@@ -583,7 +587,7 @@ export function useLiveComms() {
     return () => {
       void supabase.removeChannel(ch);
     };
-  }, [supabase, profileId, unlocked, webOk, commsMode, activePeerId, applyEnvelopeRow]);
+  }, [supabase, profileId, unlocked, cryptoOk, commsMode, activePeerId, applyEnvelopeRow]);
 
   useEffect(() => {
     if (!webOk || typeof window === "undefined") return;
@@ -596,10 +600,10 @@ export function useLiveComms() {
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active" && webOk) void flushOutboxWithUi();
+      if (s === "active") void flushOutboxWithUi();
     });
     return () => sub.remove();
-  }, [flushOutboxWithUi, webOk]);
+  }, [flushOutboxWithUi]);
 
   const createGlobalChannel = useCallback(async () => {
     if (!supabase || !profileId || !privateKeyRef.current) return;
@@ -843,7 +847,7 @@ export function useLiveComms() {
         typeof navigator.onLine === "boolean" &&
         navigator.onLine === false;
       /** Realtime drops before `navigator.onLine` — only gate on channel when web live comms is active. */
-      const realtimeNotReady = webOk && !broadcastChannelReadyRef.current;
+      const realtimeNotReady = cryptoOk && !broadcastChannelReadyRef.current;
       const queueOutbound = netOffline || realtimeNotReady;
 
       if (commsMode === "dm") {
@@ -1012,7 +1016,7 @@ export function useLiveComms() {
       const ch = channelRef.current;
       if (ch) await ch.send({ type: "broadcast", event: "e2ee", payload });
     },
-    [supabase, profileId, unlocked, commsMode, activePeerId, webOk],
+    [supabase, profileId, unlocked, commsMode, activePeerId, cryptoOk],
   );
 
   const sendText = useCallback(

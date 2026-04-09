@@ -21,6 +21,14 @@ export function eventsTable(mode: "real" | "decoy"): "events_real" | "events_dec
   return mode === "real" ? "events_real" : "events_decoy";
 }
 
+/** Native often has no `navigator.onLine`; treat unknown as online so we try sync first. */
+function isRuntimeOnline(): boolean {
+  if (typeof navigator === "undefined" || typeof navigator.onLine !== "boolean") {
+    return true;
+  }
+  return navigator.onLine;
+}
+
 export type CalendarPinRoute = "real" | "decoy" | "invalid";
 
 /** Resolve route from PIN using profile row (+ optional local hash fallback when offline / migratings). */
@@ -122,8 +130,7 @@ export async function pushNewEvent(
   const t = eventsTable(mode);
   const row = { id, author_id: profileId, encrypted_payload: enc };
 
-  const online = typeof navigator === "undefined" ? true : navigator.onLine;
-  if (!supabase || !online) {
+  if (!supabase || !isRuntimeOnline()) {
     await offlinePutEvent(mode, id, plain);
     await offlineEnqueue({ kind: "insert", mode, rowId: id, encryptedPayload: enc });
     return { id, error: null };
@@ -133,14 +140,14 @@ export async function pushNewEvent(
   if (error) {
     await offlinePutEvent(mode, id, plain);
     await offlineEnqueue({ kind: "insert", mode, rowId: id, encryptedPayload: enc });
-    return { id, error: null };
+    return { id, error: error.message };
   }
   await offlinePutEvent(mode, data.id as string, plain);
   return { id: data.id as string, error: null };
 }
 
 export async function flushCalendarSyncQueue(supabase: SupabaseClient, profileId: string): Promise<void> {
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  if (!isRuntimeOnline()) return;
   const jobs = await offlineDequeueAll();
   if (jobs.length === 0) return;
   const rest: CalendarSyncJob[] = [];

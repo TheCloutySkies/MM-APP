@@ -79,7 +79,24 @@ export async function unlockIdentityPrivateKey(
     const pkcs8 = await unwrapPrivatePkcs8WithPin(pin, profileId, rec.ivB64, rec.ctB64);
     const privateKey = await importPrivatePkcs8(pkcs8);
     return { privateKey, error: null };
-  } catch {
+  } catch (e) {
+    if (typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "OperationError") {
+      return {
+        privateKey: null,
+        error: new Error(
+          "Crypto rejected this unlock (wrong PIN, bad key material, or Web Crypto limitation on this OS). If the PIN is correct, open Team chat once here to refresh keys, or try web.",
+        ),
+      };
+    }
+    const msg = e instanceof Error ? e.message : "";
+    if (/operation.specific|OperationError|cannot unwrap/i.test(msg)) {
+      return {
+        privateKey: null,
+        error: new Error(
+          "Unlock failed at crypto (often wrong PIN or device Web Crypto limits). Confirm PIN, or use Team chat on web once.",
+        ),
+      };
+    }
     return { privateKey: null, error: new Error("Wrong PIN or corrupted identity") };
   }
 }
