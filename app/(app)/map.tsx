@@ -33,18 +33,18 @@ import {
 } from "@/components/map/TacticalMap";
 import type { GisDrawPalette, MeasurePreview } from "@/components/map/gisMapTypes";
 import type { MapBaseLayerId, MapPointerMode, MapUserLocation } from "@/components/map/mapTypes";
-import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useActivityLogger } from "@/hooks/useActivityLogger";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
+import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import { geocodeSearch } from "@/lib/geocode";
 import { encryptFeatureCollectionJson } from "@/lib/gis/geoJsonCrypto";
 import { saveEncryptedGisDraft } from "@/lib/gis/gisLocalStore";
 import {
-  appendFeature,
-  ensureFeatureId,
-  upsertFeatureInCollection,
-  type ActiveMapTool,
+    appendFeature,
+    ensureFeatureId,
+    upsertFeatureInCollection,
+    type ActiveMapTool,
 } from "@/lib/gis/gisTypes";
 import {
     BUFFER_RANGE,
@@ -70,7 +70,6 @@ import {
     tacticPayloadToLayers,
     type TacCategoryId,
 } from "@/lib/mapMarkers";
-import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import {
     bboxAroundPoint,
     fetchNasaFirmsHotspots,
@@ -92,22 +91,20 @@ const SHEET_X_CLAMP = 110;
 /** Web desktop dock: remember fullscreen (collapsed) tools sidebar. */
 const MAP_TOOLS_DOCK_COLLAPSED_KEY = "mm_map_tools_dock_collapsed_v1";
 /**
- * Default expanded height for the draggable crosshair coord panel (`CoordWidget` initial `h`).
- * The collapsed “Map tools” FAB is placed beneath this so it does not cover the readout header.
+ * Default expanded height for the map-center coord chip (`CoordWidget`).
+ * The collapsed “Map tools” FAB is placed beneath this so it does not cover the readout.
  */
-const COORD_WIDGET_DEFAULT_EXPANDED_H = 92;
+const COORD_WIDGET_DEFAULT_EXPANDED_H = 78;
 
+/** Muted tactical palette — readable on night basemaps without a full-spectrum strip. */
 const GIS_COLOR_SWATCHES = [
-  "#ef4444",
-  "#f97316",
-  "#eab308",
-  "#22c55e",
-  "#14b8a6",
-  "#3b82f6",
-  "#a855f7",
-  "#ec4899",
-  "#e4e4e7",
-  "#27272a",
+  "#6b8e5c",
+  "#9a5c5f",
+  "#b89a5c",
+  "#5f7d8c",
+  "#64748b",
+  "#a8a29e",
+  "#3f4240",
 ] as const;
 /** Web + Settings → desktop layout: dock map tools as a right sidebar instead of a bottom sheet. */
 const DESKTOP_MAP_TOOLS_DOCK_MIN_W = 920;
@@ -115,6 +112,21 @@ const DESKTOP_MAP_TOOLS_DOCK_MIN_W = 920;
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
+
+function formatBufferRadiusInput(amount: number, unit: GisDistanceUnit) {
+  return amount.toFixed(unit === "mi" || unit === "km" ? 3 : 0);
+}
+
+function snapBufferRadius(amount: number, unit: GisDistanceUnit) {
+  const { min, max, step } = BUFFER_RANGE[unit];
+  const snapped = Math.round(amount / step) * step;
+  if (!Number.isFinite(snapped)) return min;
+  return clamp(snapped, min, max);
+}
+
+const COORD_WIDGET_W = 260;
+const COORD_WIDGET_H_EXPANDED = COORD_WIDGET_DEFAULT_EXPANDED_H;
+const COORD_WIDGET_H_MIN = 40;
 
 function CoordWidget(props: {
   tint: string;
@@ -129,23 +141,25 @@ function CoordWidget(props: {
   stackBelowHudY: number;
 }) {
   const { width: winW, height: winH } = useWindowDimensions();
-  const posRef = useRef({ x: 12, y: 120, w: 230, h: 92 });
+  const posRef = useRef({ x: 12, y: 120 });
   const dragOrigin = useRef({ x: 0, y: 0 });
-  const resizeOrigin = useRef({ x: 0, y: 0, w: 0, h: 0 });
   const [pos, setPos] = useState(() => ({ ...posRef.current }));
   const [min, setMin] = useState(false);
   const positionedRef = useRef(false);
+
+  const boxH = min ? COORD_WIDGET_H_MIN : COORD_WIDGET_H_EXPANDED;
+  const boxW = min ? 220 : COORD_WIDGET_W;
 
   /** One-time placement under the HUD, right-aligned — avoids overlap with search / layers. */
   useEffect(() => {
     if (positionedRef.current || winW < 48) return;
     positionedRef.current = true;
-    const w = posRef.current.w;
-    const h = posRef.current.h;
+    const w = COORD_WIDGET_W;
+    const h = COORD_WIDGET_H_EXPANDED;
     const top = Math.max(props.stackBelowHudY, 12);
     const x = clamp(winW - w - 12, 8, Math.max(8, winW - w - 8));
     const y = clamp(top, 8, Math.max(8, winH - h - 8));
-    posRef.current = { ...posRef.current, x, y, w, h };
+    posRef.current = { x, y };
     setPos({ ...posRef.current });
   }, [winW, winH, props.stackBelowHudY]);
 
@@ -156,40 +170,18 @@ function CoordWidget(props: {
   const drag = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => !min,
-        onMoveShouldSetPanResponder: (_, g) =>
-          !min && (Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2),
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
         onPanResponderGrant: () => {
           dragOrigin.current = { x: posRef.current.x, y: posRef.current.y };
         },
         onPanResponderMove: (_, g) => {
-          if (min) return;
-          const p = posRef.current;
-          const nx = clamp(dragOrigin.current.x + g.dx, 6, Math.max(6, winW - p.w - 6));
-          const ny = clamp(dragOrigin.current.y + g.dy, 6, Math.max(6, winH - p.h - 6));
+          const nx = clamp(dragOrigin.current.x + g.dx, 6, Math.max(6, winW - boxW - 6));
+          const ny = clamp(dragOrigin.current.y + g.dy, 6, Math.max(6, winH - boxH - 6));
           setPos((prev) => ({ ...prev, x: nx, y: ny }));
         },
       }),
-    [winW, winH, min],
-  );
-
-  const resizeSE = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 1 || Math.abs(g.dy) > 1,
-        onPanResponderGrant: () => {
-          const p = posRef.current;
-          resizeOrigin.current = { x: p.x, y: p.y, w: p.w, h: p.h };
-        },
-        onPanResponderMove: (_, g) => {
-          const o = resizeOrigin.current;
-          const nw = clamp(o.w + g.dx, 190, Math.min(420, winW - o.x - 6));
-          const nh = clamp(o.h + g.dy, 72, Math.min(220, winH - o.y - 6));
-          setPos((prev) => ({ ...prev, w: nw, h: nh }));
-        },
-      }),
-    [winW, winH],
+    [winW, winH, boxW, boxH],
   );
 
   return (
@@ -199,40 +191,72 @@ function CoordWidget(props: {
         {
           left: pos.x,
           top: pos.y,
-          width: min ? 200 : pos.w,
-          height: min ? 44 : pos.h,
+          width: boxW,
+          height: boxH,
           borderColor: props.border,
           backgroundColor: props.surface,
           zIndex: 1200,
-          elevation: 14,
+          elevation: 8,
         },
-      ]}
-    >
-      <View {...drag.panHandlers} style={styles.coordHead}>
-        <Text style={[styles.coordTitle, { color: props.textMuted }]}>Crosshair</Text>
-        <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-          <Pressable onPress={props.onToggleFmt} style={styles.coordPill}>
-            <Text style={[styles.coordPillTx, { color: props.tint }]}>
-              {props.fmt === "mgrs" ? "MGRS" : "Lat/Lng"}
+      ]}>
+      <View
+        {...drag.panHandlers}
+        style={[styles.coordInner, min ? styles.coordInnerMin : styles.coordInnerExpanded]}>
+        {min ? (
+          <>
+            <Text style={[styles.coordValMin, { color: props.text }]} numberOfLines={1} selectable>
+              {props.label}
             </Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setMin((v) => !v)}
-            style={styles.coordPill}
-            accessibilityLabel={min ? "Expand coordinate panel" : "Minimize coordinate panel"}>
-            <FontAwesome name={min ? "chevron-up" : "chevron-down"} size={12} color={props.textMuted} />
-          </Pressable>
-        </View>
+            <View style={styles.coordActionsRow}>
+              <Pressable
+                onPress={props.onToggleFmt}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={props.fmt === "mgrs" ? "Show latitude and longitude" : "Show MGRS"}>
+                <Text style={[styles.coordActionLink, { color: props.tint }]}>
+                  {props.fmt === "mgrs" ? "Lat / long" : "MGRS"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setMin(false)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Expand map center readout">
+                <FontAwesome name="chevron-up" size={13} color={props.textMuted} />
+              </Pressable>
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.coordTextCol}>
+              <Text style={[styles.coordEyebrow, { color: props.textMuted }]}>
+                Map center · {props.fmt === "mgrs" ? "MGRS" : "Lat / long"}
+              </Text>
+              <Text style={[styles.coordVal, { color: props.text }]} numberOfLines={2} selectable>
+                {props.label}
+              </Text>
+            </View>
+            <View style={styles.coordActionsCol}>
+              <Pressable
+                onPress={props.onToggleFmt}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={props.fmt === "mgrs" ? "Show latitude and longitude" : "Show MGRS"}>
+                <Text style={[styles.coordActionLink, { color: props.tint }]}>
+                  {props.fmt === "mgrs" ? "Lat / long" : "MGRS"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setMin(true)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Minimize map center readout">
+                <FontAwesome name="chevron-down" size={13} color={props.textMuted} />
+              </Pressable>
+            </View>
+          </>
+        )}
       </View>
-      {!min ? (
-        <View style={styles.coordBody}>
-          <Text style={[styles.coordVal, { color: props.text }]} numberOfLines={2} selectable>
-            {props.label}
-          </Text>
-          <Text style={[styles.coordHint, { color: props.textMuted }]}>Drag header · resize corner</Text>
-        </View>
-      ) : null}
-      {!min ? <View {...resizeSE.panHandlers} style={styles.resizeCorner} /> : null}
     </View>
   );
 }
@@ -313,12 +337,14 @@ export default function MapScreen() {
   const [gisMeasureReadoutMode, setGisMeasureReadoutMode] = useState<"metric" | "imperial">("metric");
   const [measureA, setMeasureA] = useState<{ lat: number; lng: number } | null>(null);
   const [measureHover, setMeasureHover] = useState<{ lat: number; lng: number } | null>(null);
-  const [gisBufferStroke, setGisBufferStroke] = useState("#ef4444");
-  const [gisBufferFill, setGisBufferFill] = useState("#ef4444");
-  const [gisGeomanLineColor, setGisGeomanLineColor] = useState("#60a5fa");
+  const [gisBufferStroke, setGisBufferStroke] = useState("#9a5c5f");
+  const [gisBufferFill, setGisBufferFill] = useState("#9a5c5f");
+  const [gisGeomanLineColor, setGisGeomanLineColor] = useState("#5f7d8c");
   const [gisGeomanZoneStroke, setGisGeomanZoneStroke] = useState("#6b8e5c");
   const [gisGeomanZoneFill, setGisGeomanZoneFill] = useState("#6b8e5c");
-  const [gisMeasureColor, setGisMeasureColor] = useState("#fbbf24");
+  const [gisMeasureColor, setGisMeasureColor] = useState("#b89a5c");
+  const [bufferRadiusTyping, setBufferRadiusTyping] = useState(false);
+  const [bufferRadiusText, setBufferRadiusText] = useState("");
   const [milAffiliation, setMilAffiliation] = useState<TacticalAffiliation>("friendly");
   const [milUnit, setMilUnit] = useState<TacticalUnitType>("infantry");
   const [routeEtaMph, setRouteEtaMph] = useState("30");
@@ -383,6 +409,16 @@ export default function MapScreen() {
     const { min, max } = BUFFER_RANGE[bufferUnit];
     setBufferRadiusAmount((a) => Math.max(min, Math.min(max, a)));
   }, [bufferModal, bufferUnit]);
+
+  useEffect(() => {
+    if (!bufferModal) {
+      setBufferRadiusTyping(false);
+      return;
+    }
+    if (!bufferRadiusTyping) {
+      setBufferRadiusText(formatBufferRadiusInput(bufferRadiusAmount, bufferUnit));
+    }
+  }, [bufferModal, bufferUnit, bufferRadiusAmount, bufferRadiusTyping]);
 
   useEffect(() => {
     let nativeSub: { remove: () => void } | null = null;
@@ -682,6 +718,37 @@ export default function MapScreen() {
         activeMapTool === "mil_symbol"))
       ? "crosshair"
       : "default";
+
+  const selectActiveMapTool = useCallback((id: ActiveMapTool) => {
+    setDrawTool("idle");
+    setPointDropMode(false);
+    setPathDraft([]);
+    setMeasureA(null);
+    setMeasureHover(null);
+    setActiveMapTool(id);
+  }, []);
+
+  const nudgeBufferRadius = useCallback(
+    (dir: -1 | 1) => {
+      setBufferRadiusTyping(false);
+      const { step } = BUFFER_RANGE[bufferUnit];
+      setBufferRadiusAmount((a) => snapBufferRadius(a + dir * step, bufferUnit));
+    },
+    [bufferUnit],
+  );
+
+  const commitBufferRadiusField = useCallback(() => {
+    setBufferRadiusTyping(false);
+    const parsed = parseFloat(bufferRadiusText.replace(",", "."));
+    if (!Number.isFinite(parsed)) {
+      setBufferRadiusText(formatBufferRadiusInput(bufferRadiusAmount, bufferUnit));
+      return;
+    }
+    const { min, max } = BUFFER_RANGE[bufferUnit];
+    const next = snapBufferRadius(clamp(parsed, min, max), bufferUnit);
+    setBufferRadiusAmount(next);
+    setBufferRadiusText(formatBufferRadiusInput(next, bufferUnit));
+  }, [bufferRadiusAmount, bufferRadiusText, bufferUnit]);
 
   const finishPathDrawing = () => {
     if (drawTool === "route" && pathDraft.length >= 2) {
@@ -1280,6 +1347,61 @@ export default function MapScreen() {
         <View style={[styles.crosshairLineV, { backgroundColor: chrome.tint }]} />
       </View>
 
+      {Platform.OS === "web" ? (
+        <View
+          style={[
+            styles.mapToolRail,
+            {
+              top: coordStackBelowHud,
+              backgroundColor: chrome.surface,
+              borderColor: chrome.border,
+            },
+          ]}>
+          {(
+            [
+              ["navigate", "Nav"],
+              ["buffer", "Buf"],
+              ["measure", "Msr"],
+              ["draw", "Draw"],
+              ["mil_symbol", "MIL"],
+            ] as const
+          ).map(([id, short]) => (
+            <Pressable
+              key={id}
+              accessibilityRole="button"
+              accessibilityLabel={
+                id === "navigate"
+                  ? "Navigate"
+                  : id === "buffer"
+                    ? "Buffer"
+                    : id === "measure"
+                      ? "Measure"
+                      : id === "draw"
+                        ? "Draw"
+                        : "MIL point"
+              }
+              accessibilityState={{ selected: activeMapTool === id }}
+              onPress={() => selectActiveMapTool(id)}
+              style={({ pressed }) => [
+                styles.mapToolRailBtn,
+                {
+                  borderColor: activeMapTool === id ? chrome.tint : chrome.border,
+                  borderWidth: activeMapTool === id ? 2 : 1,
+                  backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                },
+              ]}>
+              <Text
+                style={[
+                  styles.mapToolRailLabel,
+                  { color: activeMapTool === id ? chrome.tint : chrome.text },
+                ]}>
+                {short}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
       {layersOpen ? (
         <Pressable
           accessibilityLabel="Close layers menu"
@@ -1489,43 +1611,9 @@ export default function MapScreen() {
               <>
                 <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Tactical GIS (browser)</Text>
                 <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>
-                  Turf.js buffers, Geoman sketch, milsymbol markers, live MGRS cursor — all client-side. Save encrypts the
-                  GeoJSON to this device only (IndexedDB). Viewshed / elevation need cached DEM tiles (later).
+                  Modes live on the left map rail (Nav / Buf / Msr / Draw / MIL). Turf.js buffers, Geoman sketch, milsymbol
+                  markers, live MGRS cursor — all client-side. Save encrypts the GeoJSON to this device only (IndexedDB).
                 </Text>
-                <ChipStrip>
-                  {(
-                    [
-                      ["navigate", "Navigate"],
-                      ["buffer", "Buffer"],
-                      ["measure", "Measure"],
-                      ["draw", "Draw"],
-                      ["mil_symbol", "MIL pt"],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <Pressable
-                      key={id}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: activeMapTool === id }}
-                      style={({ pressed }) => [
-                        styles.chip,
-                        {
-                          borderWidth: activeMapTool === id ? 2 : 1,
-                          borderColor: activeMapTool === id ? chrome.tint : chrome.tabIconDefault,
-                          backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
-                        },
-                      ]}
-                      onPress={() => {
-                        setDrawTool("idle");
-                        setPointDropMode(false);
-                        setPathDraft([]);
-                        setMeasureA(null);
-                        setMeasureHover(null);
-                        setActiveMapTool(id);
-                      }}>
-                      <Text style={[styles.chipLabel, { color: chrome.text }]}>{label}</Text>
-                    </Pressable>
-                  ))}
-                </ChipStrip>
                 {activeMapTool === "measure" ? (
                   <>
                     <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>
@@ -1559,24 +1647,6 @@ export default function MapScreen() {
                         onPress={() => setGisMeasureReadoutMode("imperial")}>
                         <Text style={[styles.chipLabel, { color: chrome.text }]}>Imperial</Text>
                       </Pressable>
-                    </ChipStrip>
-                    <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Measure color</Text>
-                    <ChipStrip>
-                      {GIS_COLOR_SWATCHES.map((c) => (
-                        <Pressable
-                          key={`m-${c}`}
-                          onPress={() => setGisMeasureColor(c)}
-                          accessibilityLabel={`Measure color ${c}`}
-                          style={[
-                            styles.gisColorSwatchOuter,
-                            {
-                              borderColor: gisMeasureColor === c ? chrome.tint : chrome.border,
-                              borderWidth: gisMeasureColor === c ? 2 : 1,
-                            },
-                          ]}>
-                          <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
-                        </Pressable>
-                      ))}
                     </ChipStrip>
                   </>
                 ) : null}
@@ -1634,82 +1704,7 @@ export default function MapScreen() {
                     </ChipStrip>
                   </>
                 ) : null}
-                <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Sketch colors (Geoman)</Text>
-                <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>Line</Text>
                 <ChipStrip>
-                  {GIS_COLOR_SWATCHES.map((c) => (
-                    <Pressable
-                      key={`ln-${c}`}
-                      onPress={() => setGisGeomanLineColor(c)}
-                      accessibilityLabel={`Line color ${c}`}
-                      style={[
-                        styles.gisColorSwatchOuter,
-                        {
-                          borderColor: gisGeomanLineColor === c ? chrome.tint : chrome.border,
-                          borderWidth: gisGeomanLineColor === c ? 2 : 1,
-                        },
-                      ]}>
-                      <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
-                    </Pressable>
-                  ))}
-                </ChipStrip>
-                <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>Zone outline</Text>
-                <ChipStrip>
-                  {GIS_COLOR_SWATCHES.map((c) => (
-                    <Pressable
-                      key={`zs-${c}`}
-                      onPress={() => setGisGeomanZoneStroke(c)}
-                      accessibilityLabel={`Zone stroke ${c}`}
-                      style={[
-                        styles.gisColorSwatchOuter,
-                        {
-                          borderColor: gisGeomanZoneStroke === c ? chrome.tint : chrome.border,
-                          borderWidth: gisGeomanZoneStroke === c ? 2 : 1,
-                        },
-                      ]}>
-                      <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
-                    </Pressable>
-                  ))}
-                </ChipStrip>
-                <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>Zone fill</Text>
-                <ChipStrip>
-                  {GIS_COLOR_SWATCHES.map((c) => (
-                    <Pressable
-                      key={`zf-${c}`}
-                      onPress={() => setGisGeomanZoneFill(c)}
-                      accessibilityLabel={`Zone fill ${c}`}
-                      style={[
-                        styles.gisColorSwatchOuter,
-                        {
-                          borderColor: gisGeomanZoneFill === c ? chrome.tint : chrome.border,
-                          borderWidth: gisGeomanZoneFill === c ? 2 : 1,
-                        },
-                      ]}>
-                      <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
-                    </Pressable>
-                  ))}
-                </ChipStrip>
-                <ChipStrip>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.chip,
-                      { opacity: 0.45, borderColor: chrome.tabIconDefault },
-                      pressed ? { opacity: 0.35 } : null,
-                    ]}
-                    disabled
-                    accessibilityState={{ disabled: true }}>
-                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Viewshed</Text>
-                  </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.chip,
-                      { opacity: 0.45, borderColor: chrome.tabIconDefault },
-                      pressed ? { opacity: 0.35 } : null,
-                    ]}
-                    disabled
-                    accessibilityState={{ disabled: true }}>
-                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Elev profile</Text>
-                  </Pressable>
                   <Pressable
                     style={({ pressed }) => [
                       styles.chip,
@@ -2173,6 +2168,7 @@ export default function MapScreen() {
                   ]}
                   onPress={() => {
                     if (u === bufferUnit) return;
+                    setBufferRadiusTyping(false);
                     setBufferRadiusAmount((amt) => {
                       const conv = convertAmountBetweenUnits(amt, bufferUnit, u);
                       const { min, max } = BUFFER_RANGE[u];
@@ -2189,10 +2185,25 @@ export default function MapScreen() {
               {bufferUnit === "m" && "Meters"}
               {bufferUnit === "mi" && "Miles"}
               {bufferUnit === "yd" && "Yards"}
-              {`: ${bufferRadiusAmount.toFixed(bufferUnit === "mi" || bufferUnit === "km" ? 3 : 0)}`}
+              {`: ${bufferRadiusAmount.toFixed(bufferUnit === "mi" || bufferUnit === "km" ? 3 : 0)} · Range `}
+              {BUFFER_RANGE[bufferUnit].min}–{BUFFER_RANGE[bufferUnit].max}{" "}
+              {bufferUnit === "km" ? "km" : bufferUnit === "m" ? "m" : bufferUnit === "mi" ? "mi" : "yd"}
             </Text>
             <View style={styles.bufferSliderRow}>
-              <Text style={{ color: chrome.tabIconDefault, fontSize: 11 }}>Min</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Decrease buffer radius"
+                onPress={() => nudgeBufferRadius(-1)}
+                style={({ pressed }) => [
+                  styles.bufferStepperBtn,
+                  {
+                    borderColor: chrome.border,
+                    backgroundColor: scheme === "dark" ? "#18181b" : "#f4f4f5",
+                    opacity: pressed ? 0.85 : 1,
+                  },
+                ]}>
+                <Text style={{ color: chrome.text, fontSize: 20, fontWeight: "800", lineHeight: 22 }}>−</Text>
+              </Pressable>
               <Slider
                 key={`buffer-radius-${bufferUnit}`}
                 style={styles.bufferSlider}
@@ -2200,12 +2211,50 @@ export default function MapScreen() {
                 maximumValue={BUFFER_RANGE[bufferUnit].max}
                 step={BUFFER_RANGE[bufferUnit].step}
                 value={bufferRadiusAmount}
-                onValueChange={(v) => setBufferRadiusAmount(v)}
+                onValueChange={(v) => {
+                  setBufferRadiusTyping(false);
+                  setBufferRadiusAmount(v);
+                }}
                 minimumTrackTintColor={chrome.tint}
                 maximumTrackTintColor={chrome.border}
                 thumbTintColor={Platform.OS === "ios" ? undefined : chrome.tint}
               />
-              <Text style={{ color: chrome.tabIconDefault, fontSize: 11 }}>Max</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Increase buffer radius"
+                onPress={() => nudgeBufferRadius(1)}
+                style={({ pressed }) => [
+                  styles.bufferStepperBtn,
+                  {
+                    borderColor: chrome.border,
+                    backgroundColor: scheme === "dark" ? "#18181b" : "#f4f4f5",
+                    opacity: pressed ? 0.85 : 1,
+                  },
+                ]}>
+                <Text style={{ color: chrome.text, fontSize: 20, fontWeight: "800", lineHeight: 22 }}>+</Text>
+              </Pressable>
+            </View>
+            <View style={styles.bufferRadiusFieldRow}>
+              <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault, marginTop: 0, flexShrink: 0 }]}>
+                Exact value
+              </Text>
+              <TextInput
+                value={bufferRadiusText}
+                onChangeText={setBufferRadiusText}
+                onFocus={() => setBufferRadiusTyping(true)}
+                onBlur={() => commitBufferRadiusField()}
+                keyboardType="decimal-pad"
+                style={[
+                  styles.bufferRadiusInput,
+                  {
+                    color: chrome.text,
+                    borderColor: scheme === "dark" ? "#3f3f46" : "#d4d4d8",
+                    backgroundColor: scheme === "dark" ? "#09090b" : "#fafafa",
+                  },
+                ]}
+                returnKeyType="done"
+                onSubmitEditing={() => commitBufferRadiusField()}
+              />
             </View>
             <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Buffer colors</Text>
             <ChipStrip>
@@ -2760,37 +2809,33 @@ const styles = StyleSheet.create({
 
   coordBox: {
     position: "absolute",
-    borderWidth: 1,
-    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
     overflow: "hidden",
-    ...(Platform.OS === "web" ? { boxShadow: "0 10px 22px rgba(0,0,0,0.35)" } : { elevation: 12 }),
+    ...(Platform.OS === "web" ? { boxShadow: "0 2px 10px rgba(0,0,0,0.2)" } : { elevation: 6 }),
   },
-  coordHead: {
+  coordInner: {
+    flex: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  coordInnerExpanded: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  coordInnerMin: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: TacticalPalette.border,
+    gap: 8,
   },
-  coordTitle: { fontSize: 11, fontWeight: "900", letterSpacing: 0.6, textTransform: "uppercase" },
-  coordPill: { borderWidth: 1, borderColor: TacticalPalette.border, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 10 },
-  coordPillTx: { fontSize: 11, fontWeight: "900" },
-  coordBody: { paddingHorizontal: 12, paddingVertical: 10, gap: 6 },
-  coordVal: { fontSize: 14, fontWeight: "800" },
-  coordHint: { fontSize: 10, fontWeight: "700", opacity: 0.7 },
-  resizeCorner: {
-    position: "absolute",
-    right: 0,
-    bottom: 0,
-    width: 22,
-    height: 22,
-    borderLeftWidth: 2,
-    borderTopWidth: 2,
-    borderColor: TacticalPalette.borderLight,
-    backgroundColor: "rgba(0,0,0,0.12)",
-  },
+  coordTextCol: { flex: 1, minWidth: 0, gap: 4 },
+  coordEyebrow: { fontSize: 10, fontWeight: "700", letterSpacing: 0.2 },
+  coordVal: { fontSize: 14, fontWeight: "800", lineHeight: 18 },
+  coordValMin: { fontSize: 12, fontWeight: "800", flex: 1, minWidth: 0 },
+  coordActionsCol: { alignItems: "flex-end", gap: 10, paddingTop: 2 },
+  coordActionsRow: { flexDirection: "row", alignItems: "center", gap: 10, flexShrink: 0 },
+  coordActionLink: { fontSize: 12, fontWeight: "800" },
   intelToolsToggle: {
     borderWidth: 1,
     borderRadius: 10,
@@ -2981,13 +3026,59 @@ const styles = StyleSheet.create({
     minWidth: 0,
     height: 40,
   },
+  bufferStepperBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bufferRadiusFieldRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 2,
+  },
+  bufferRadiusInput: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 10 : 8,
+    fontSize: 16,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+  },
+  mapToolRail: {
+    position: "absolute",
+    left: 10,
+    zIndex: 1040,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 6,
+    gap: 4,
+  },
+  mapToolRailBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 52,
+  },
+  mapToolRailLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
   gisColorSwatchOuter: {
-    padding: 3,
-    borderRadius: 8,
+    padding: 2,
+    borderRadius: 6,
   },
   gisColorSwatchInner: {
-    width: 22,
-    height: 22,
-    borderRadius: 5,
+    width: 18,
+    height: 18,
+    borderRadius: 4,
   },
 });

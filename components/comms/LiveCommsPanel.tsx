@@ -1,6 +1,6 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { useCallback, useEffect, useRef, useState } from "react";
 import * as ImagePicker from "expo-image-picker";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -62,11 +62,16 @@ function ModeChip({
   );
 }
 
-type Props = { variant: "trailing" | "sheet"; onCloseSheet?: () => void };
+type Props = {
+  variant: "trailing" | "sheet";
+  onCloseSheet?: () => void;
+  /** Desktop rail only: collapse this panel back to the floating “Comms” bubble. */
+  onCollapseTrailing?: () => void;
+};
 
 type VaultObjectRow = { id: string; storage_path: string; created_at: string };
 
-export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
+export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Props) {
   const chrome = useTacticalChrome();
   const supabase = useMMStore((s) => s.supabase);
   const vaultMode = useMMStore((s) => s.vaultMode);
@@ -338,6 +343,16 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
               <FontAwesome name="times" size={22} color={chrome.tint} />
             </Pressable>
           ) : null}
+          {variant === "trailing" && onCollapseTrailing ? (
+            <Pressable
+              onPress={onCollapseTrailing}
+              hitSlop={12}
+              style={{ marginLeft: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Collapse team chat">
+              <FontAwesome name="chevron-right" size={20} color={chrome.tabIconDefault} />
+            </Pressable>
+          ) : null}
         </View>
       ) : (
         <View style={styles.headRow}>
@@ -351,6 +366,15 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
           {variant === "sheet" && onCloseSheet ? (
             <Pressable onPress={onCloseSheet} hitSlop={12} accessibilityRole="button">
               <FontAwesome name="times" size={22} color={chrome.tint} />
+            </Pressable>
+          ) : null}
+          {variant === "trailing" && onCollapseTrailing ? (
+            <Pressable
+              onPress={onCollapseTrailing}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Collapse team chat">
+              <FontAwesome name="chevron-right" size={22} color={chrome.tabIconDefault} />
             </Pressable>
           ) : null}
         </View>
@@ -416,7 +440,7 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
           </Pressable>
         </ScrollView>
       ) : (
-        <>
+        <View style={styles.unlockedColumn}>
           {outboxSyncHalted ? (
             <View
               style={[
@@ -639,6 +663,7 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
             </View>
           ) : null}
 
+          <View style={styles.msgComposeColumn}>
           <FlatList
             ref={listRef}
             data={messages}
@@ -735,6 +760,7 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
               accessibilityRole="button">
               <FontAwesome name="send" size={16} color={TacticalPalette.matteBlack} />
             </Pressable>
+          </View>
           </View>
 
           <Modal visible={newChatOpen} animationType="slide" transparent onRequestClose={() => setNewChatOpen(false)}>
@@ -897,7 +923,7 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
               </Pressable>
             </Pressable>
           </Modal>
-        </>
+        </View>
       )}
     </View>
   );
@@ -989,6 +1015,8 @@ function MessageBubble({
 }
 
 const styles = StyleSheet.create({
+  unlockedColumn: { flex: 1, minHeight: 0, minWidth: 0 },
+  msgComposeColumn: { flex: 1, minHeight: 0, minWidth: 0 },
   wrap: {
     flex: 1,
     minWidth: 280,
@@ -1178,13 +1206,15 @@ const styles = StyleSheet.create({
   },
   composerInput: {
     flex: 1,
-    minHeight: 44,
-    maxHeight: 120,
+    minWidth: 0,
+    minHeight: 52,
+    maxHeight: 160,
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     fontSize: 15,
+    lineHeight: 20,
   },
   sendFab: {
     width: 44,

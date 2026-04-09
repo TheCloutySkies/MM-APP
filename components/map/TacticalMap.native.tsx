@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import MapView, {
     MAP_TYPES,
     Marker,
@@ -77,8 +77,12 @@ export function TacticalMap({
 }: Props) {
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
-  const baseMapType =
-    Platform.OS === "android" ? MAP_TYPES.NONE : MAP_TYPES.MUTEDSTANDARD;
+  /**
+   * Android: `NONE` shows only custom tiles.
+   * iOS: `MUTEDSTANDARD` still draws an opaque basemap; `UrlTile` with zIndex &lt; 0 renders *under* that layer,
+   * which looks like a “broken” map. Use `NONE` on iOS too so raster tiles are actually visible.
+   */
+  const baseMapType = MAP_TYPES.NONE;
 
   useEffect(() => {
     if (flyTo == null) return;
@@ -142,7 +146,7 @@ export function TacticalMap({
           {...(baseLayer === "osm_dark" || baseLayer === "topo"
             ? { tileCacheMaxAge: 60 * 60 * 24 }
             : {})}
-          zIndex={-1}
+          zIndex={100}
         />
         {baseLayer === "hybrid" ? (
           <UrlTile
@@ -151,7 +155,7 @@ export function TacticalMap({
             minimumZ={0}
             tileSize={256}
             urlTemplate={ESRI_REFERENCE_LABELS_TILE_TEMPLATE}
-            zIndex={0}
+            zIndex={110}
           />
         ) : null}
         {polygons.map((poly) => (
