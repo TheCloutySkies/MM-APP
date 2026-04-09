@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
     ActivityIndicator,
-    InteractionManager,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -19,6 +18,7 @@ import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { isLegacyRosterLoginInputAllowed } from "@/constants/allowlist";
 import { MM_UNIVERSAL_ACCESS_KEY } from "@/constants/mmAccess";
+import { runAfterInteractionsWebSafe } from "@/lib/ui/runAfterInteractionsWebSafe";
 import { getAuthSupabase } from "@/lib/supabase/authSupabase";
 import { invokeMmLogin, mmLoginErrorMessage } from "@/lib/supabase/mmClient";
 import { useMMStore } from "@/store/mmStore";
@@ -43,9 +43,7 @@ export default function LoginScreen() {
   const [info, setInfo] = useState<string | null>(null);
 
   const goNextAfterSession = async () => {
-    await new Promise<void>((resolve) => {
-      InteractionManager.runAfterInteractions(() => resolve());
-    });
+    await runAfterInteractionsWebSafe();
     const { callsignOk, setupComplete } = useMMStore.getState();
     if (!callsignOk) {
       router.replace("/(auth)/callsign" as Href);

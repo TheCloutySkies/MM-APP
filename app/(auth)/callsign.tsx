@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
     ActivityIndicator,
-    InteractionManager,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -24,6 +23,7 @@ import {
 } from "@/constants/callsign";
 import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
+import { runAfterInteractionsWebSafe } from "@/lib/ui/runAfterInteractionsWebSafe";
 import { useMMStore } from "@/store/mmStore";
 
 export default function CallsignScreen() {
@@ -42,9 +42,7 @@ export default function CallsignScreen() {
 
   const goNext = async () => {
     const next = (setupComplete ? "/(auth)/unlock" : "/(auth)/setup") as Href;
-    await new Promise<void>((resolve) => {
-      InteractionManager.runAfterInteractions(() => resolve());
-    });
+    await runAfterInteractionsWebSafe();
     router.replace(next);
   };
 
