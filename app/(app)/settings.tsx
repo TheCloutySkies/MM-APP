@@ -22,6 +22,7 @@ import { MAIN_TAB_LABEL, MAIN_TAB_ROUTE_ORDER } from "@/constants/mainTabs";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { deriveKeyArgon2id } from "@/lib/crypto/kdf";
 import { buildEncryptedVaultExport, copyExportToClipboard } from "@/lib/p2p/exportVault";
+import { purgeAllUserContributions } from "@/lib/supabase/purgeUserContributions";
 import { MAP_NIGHT_DIM, useMMStore } from "@/store/mmStore";
 
 export default function SettingsScreen() {
@@ -379,6 +380,57 @@ export default function SettingsScreen() {
         </Pressable>
       </SettingsSection>
 
+      <SettingsSection
+        title="OH GOD FEDS"
+        subtitle="Server purge for this profile: posts, pins, ops, vault index + files, gear, calendar, GPX exports, comments, team position. Resets layout to auto and clears calendar salts. Then wipes this device and signs out. Your login is not deleted.">
+        <Pressable
+          style={({ pressed }) => [
+            styles.fedsBtn,
+            { borderColor: "#b91c1c", backgroundColor: pressed ? "rgba(185,28,28,0.12)" : "transparent" },
+          ]}
+          onPress={() => {
+            if (!supabase || !profileId) {
+              Alert.alert("FEDS", "Sign in first.");
+              return;
+            }
+            Alert.alert(
+              "OH GOD FEDS",
+              "This permanently deletes your contributions on the server (see section subtitle), scrubs a few profile fields, wipes local secrets, and signs you out. Continue?",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Continue",
+                  style: "destructive",
+                  onPress: () =>
+                    Alert.alert("Last check", "There is no undo. Nuclear wipe now?", [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "DELETE EVERYTHING",
+                        style: "destructive",
+                        onPress: async () => {
+                          const { errors } = await purgeAllUserContributions(supabase, profileId);
+                          if (errors.length) {
+                            Alert.alert(
+                              "Server purge",
+                              `Some deletes failed (offline or policy). Local wipe runs anyway.\n\n${errors.slice(0, 5).join("\n")}`,
+                            );
+                          }
+                          await fullLock();
+                          router.replace("/(auth)/login");
+                        },
+                      },
+                    ]),
+                },
+              ],
+            );
+          }}>
+          <Text style={styles.fedsBtnText}>OH GOD FEDS</Text>
+          <Text style={[styles.secondaryBtnHint, { color: chrome.tabIconDefault, marginTop: 6 }]}>
+            Two confirmations required. Use if you need to vanish your footprint from shared data and this device.
+          </Text>
+        </Pressable>
+      </SettingsSection>
+
       <SettingsSection title="Session">
         <Pressable
           style={({ pressed }) => [
@@ -503,4 +555,12 @@ const styles = StyleSheet.create({
   teamKeyActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, marginTop: 14 },
   teamKeySave: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12 },
   teamKeyClear: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1 },
+  fedsBtn: {
+    borderWidth: 2,
+    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    alignItems: "center",
+  },
+  fedsBtnText: { fontSize: 17, fontWeight: "900", color: "#b91c1c", letterSpacing: 0.5 },
 });

@@ -64,6 +64,7 @@ type OpsReportRow = {
   created_at: string;
   doc_kind: OpsDocKind;
   author_username: string;
+  author_id: string;
 };
 
 type VaultSection = "private" | OpsDocKind;
@@ -253,7 +254,7 @@ export default function VaultScreen() {
       if (!supabase) return;
       const { data, error } = await supabase
         .from("ops_reports")
-        .select("id, encrypted_payload, created_at, doc_kind, author_username")
+        .select("id, encrypted_payload, created_at, doc_kind, author_username, author_id")
         .eq("doc_kind", kind)
         .order("created_at", { ascending: false });
       if (error) {
@@ -336,6 +337,21 @@ export default function VaultScreen() {
     await uploadBytes(buf, u.mimeType ?? "image/jpeg");
   };
 
+  const deletePrivateVaultObject = async (row: VaultObjectRow) => {
+    if (!supabase) return;
+    const { error: stErr } = await supabase.storage.from("vault").remove([row.storage_path]);
+    if (stErr) {
+      Alert.alert("Storage", stErr.message);
+      return;
+    }
+    const { error: dbErr } = await supabase.from("vault_objects").delete().eq("id", row.id);
+    if (dbErr) {
+      Alert.alert("Vault", dbErr.message);
+      return;
+    }
+    void refreshPrivate();
+  };
+
   const openPrivateRow = async (row: VaultObjectRow) => {
     if (Platform.OS === "web" && !isWebOnline()) {
       Alert.alert(
@@ -360,6 +376,14 @@ export default function VaultScreen() {
       Alert.alert(
         disp.title + (disp.subtitle ? ` (${disp.subtitle})` : ""),
         `Decrypted ${plain.length} bytes.\n\nPreview:\n${preview}${plain.length > 120 ? "…" : ""}`,
+        [
+          { text: "Close", style: "cancel" },
+          {
+            text: "Delete my file",
+            style: "destructive",
+            onPress: () => void deletePrivateVaultObject(row),
+          },
+        ],
       );
     } catch {
       Alert.alert("Decrypt", "Could not open (wrong vault?).");
@@ -376,6 +400,8 @@ export default function VaultScreen() {
       );
       return;
     }
+    if (!supabase) return;
+    const own = profileId != null && row.author_id === profileId;
     try {
       const aad = OPS_AAD[row.doc_kind];
       const json = decryptUtf8(mapKey, row.encrypted_payload, aad);
@@ -397,9 +423,56 @@ export default function VaultScreen() {
       }
       const alertTitle =
         (disp.subtitle ? `${disp.title} · ${disp.subtitle}` : disp.title) + ` · ${row.author_username}`;
-      Alert.alert(alertTitle, body.slice(0, 4000));
+      const buttons: {
+        text: string;
+        style?: "default" | "cancel" | "destructive";
+        onPress?: () => void;
+      }[] = [{ text: "Close", style: "cancel" as const }];
+      if (own) {
+        buttons.push({
+          text: "Delete my report",
+          style: "destructive",
+          onPress: () =>
+            Alert.alert("Delete report", "Remove this ciphertext for everyone?", [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: async () => {
+                  const { error: delErr } = await supabase.from("ops_reports").delete().eq("id", row.id);
+                  if (delErr) Alert.alert("Team reports", delErr.message);
+                  else void refresh();
+                },
+              },
+            ]),
+        });
+      }
+      Alert.alert(alertTitle, body.slice(0, 4000), buttons);
     } catch {
-      Alert.alert("Team reports", "Decrypt failed (wrong operational key).");
+      if (own) {
+        Alert.alert("Team reports", "Decrypt failed (wrong operational key).", [
+          { text: "Close", style: "cancel" },
+          {
+            text: "Delete my report",
+            style: "destructive",
+            onPress: () =>
+              Alert.alert("Delete report", "Remove this ciphertext for everyone?", [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Delete",
+                  style: "destructive",
+                  onPress: async () => {
+                    const { error: delErr } = await supabase.from("ops_reports").delete().eq("id", row.id);
+                    if (delErr) Alert.alert("Team reports", delErr.message);
+                    else void refresh();
+                  },
+                },
+              ]),
+          },
+        ]);
+      } else {
+        Alert.alert("Team reports", "Decrypt failed (wrong operational key).");
+      }
     }
   };
 

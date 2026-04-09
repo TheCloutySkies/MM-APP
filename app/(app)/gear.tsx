@@ -33,6 +33,7 @@ function newId() {
 
 type Row = {
   id: string;
+  author_id: string;
   author_username: string;
   encrypted_payload: string;
   created_at: string;
@@ -65,7 +66,13 @@ export default function GearScreen() {
   const [l1, setL1] = useState("");
   const [l2, setL2] = useState("");
   const [l3, setL3] = useState("");
-  const [detail, setDetail] = useState<{ title: string; body: string; subtitle: string } | null>(null);
+  const [detail, setDetail] = useState<{
+    title: string;
+    body: string;
+    subtitle: string;
+    rowId: string;
+    authorId: string;
+  } | null>(null);
 
   useEffect(() => {
     if (username?.trim()) {
@@ -84,7 +91,7 @@ export default function GearScreen() {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("gear_loadouts")
-      .select("id, author_username, encrypted_payload, created_at")
+      .select("id, author_id, author_username, encrypted_payload, created_at")
       .order("created_at", { ascending: false });
     if (error) {
       Alert.alert("Gear", error.message);
@@ -162,6 +169,8 @@ export default function GearScreen() {
         title: o.name,
         subtitle: `${gearLoadoutTypeLabel(o.loadoutType)} · ${row.author_username} · saved ${row.created_at}`,
         body,
+        rowId: row.id,
+        authorId: row.author_id,
       });
     } catch {
       Alert.alert("Gear", "Cannot decrypt.");
@@ -279,6 +288,30 @@ export default function GearScreen() {
         subtitle={detail?.subtitle}
         body={detail?.body ?? ""}
         onClose={() => setDetail(null)}
+        onDelete={
+          detail && profileId && detail.authorId === profileId
+            ? () => {
+                Alert.alert("Delete loadout", "Remove this gear list for everyone?", [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                      if (!supabase) return;
+                      const { error: delErr } = await supabase.from("gear_loadouts").delete().eq("id", detail.rowId);
+                      if (delErr) {
+                        Alert.alert("Gear", delErr.message);
+                        return;
+                      }
+                      setDetail(null);
+                      void refresh();
+                    },
+                  },
+                ]);
+              }
+            : undefined
+        }
+        deleteLabel="Delete my loadout"
       />
     </View>
   );

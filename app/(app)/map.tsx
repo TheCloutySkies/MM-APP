@@ -39,7 +39,12 @@ import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { geocodeSearch } from "@/lib/geocode";
 import { encryptFeatureCollectionJson } from "@/lib/gis/geoJsonCrypto";
 import { saveEncryptedGisDraft } from "@/lib/gis/gisLocalStore";
-import { appendFeature, ensureFeatureId, type ActiveMapTool } from "@/lib/gis/gisTypes";
+import {
+  appendFeature,
+  ensureFeatureId,
+  upsertFeatureInCollection,
+  type ActiveMapTool,
+} from "@/lib/gis/gisTypes";
 import {
     BUFFER_RANGE,
     bufferAmountToKm,
@@ -84,6 +89,11 @@ const MIN_SHEET_H = 56;
 const SHEET_X_CLAMP = 110;
 /** Web desktop dock: remember fullscreen (collapsed) tools sidebar. */
 const MAP_TOOLS_DOCK_COLLAPSED_KEY = "mm_map_tools_dock_collapsed_v1";
+/**
+ * Default expanded height for the draggable crosshair coord panel (`CoordWidget` initial `h`).
+ * The collapsed “Map tools” FAB is placed beneath this so it does not cover the readout header.
+ */
+const COORD_WIDGET_DEFAULT_EXPANDED_H = 92;
 
 const GIS_COLOR_SWATCHES = [
   "#ef4444",
@@ -191,7 +201,7 @@ function CoordWidget(props: {
           height: min ? 44 : pos.h,
           borderColor: props.border,
           backgroundColor: props.surface,
-          zIndex: 1100,
+          zIndex: 1200,
           elevation: 14,
         },
       ]}
@@ -421,7 +431,7 @@ export default function MapScreen() {
     if (!supabase || !mapKey) return;
     const { data, error } = await supabase
       .from("map_markers")
-      .select("id, encrypted_payload")
+      .select("id, profile_id, encrypted_payload")
       .order("created_at", { ascending: false });
     if (error) {
       console.warn(error.message);
@@ -438,7 +448,7 @@ export default function MapScreen() {
         const stale = payload.staleHours
           ? Date.now() - payload.droppedAt > payload.staleHours * 3600 * 1000
           : false;
-        const layers = tacticPayloadToLayers(row.id, payload, stale);
+        const layers = tacticPayloadToLayers(row.id, payload, stale, row.profile_id as string | null);
         nextPins.push(...layers.pins);
         nextLines.push(...layers.polylines);
         nextPolys.push(...layers.polygons);
@@ -450,6 +460,20 @@ export default function MapScreen() {
     setTacticalPolylines(nextLines);
     setTacticalPolygons(nextPolys);
   }, [mapKey, supabase]);
+
+  const deleteTacticalMarkerRow = useCallback(
+    async (markerId: string) => {
+      if (!supabase) return;
+      const { error: delErr } = await supabase.from("map_markers").delete().eq("id", markerId);
+      if (delErr) {
+        Alert.alert("Map", delErr.message);
+        return;
+      }
+      setSelectedPin(null);
+      void loadMarkers();
+    },
+    [supabase, loadMarkers],
+  );
 
   useEffect(() => {
     void loadMarkers();
@@ -1080,6 +1104,26 @@ export default function MapScreen() {
     }
   }, [gisFc, mapKey]);
 
+  const commitGisFeature = useCallback(
+    (next: Feature) => {
+      const fixed = ensureFeatureId(next);
+      setGisFc((prev) => {
+        const fc = upsertFeatureInCollection(prev, fixed);
+        if (mapKey) {
+          try {
+            const blob = encryptFeatureCollectionJson(fc, mapKey);
+            void saveEncryptedGisDraft(blob);
+          } catch (e) {
+            Alert.alert("GIS backup", e instanceof Error ? e.message : "Could not write encrypted draft.");
+          }
+        }
+        return fc;
+      });
+      setSelectedGisFeature(fixed);
+    },
+    [mapKey],
+  );
+
   const applyBufferFromModal = () => {
     if (!bufferModal) return;
     const km = bufferAmountToKm(bufferRadiusAmount, bufferUnit);
@@ -1136,6 +1180,8 @@ export default function MapScreen() {
 
   const mapHudPadTop = Math.max(10, insets.top + 8);
   const coordStackBelowHud = mapHudPadTop + 54 + 10;
+  /** Match `CoordWidget` default expanded height so the collapsed Map tools FAB clears the crosshair panel. */
+  const mapToolsExpandFabTop = coordStackBelowHud + COORD_WIDGET_DEFAULT_EXPANDED_H + 12;
 
   const mapNode = (
     <View style={{ flex: 1, minHeight: 0 }}>
@@ -2120,7 +2166,7 @@ export default function MapScreen() {
                 style={({ pressed }) => [
                   styles.mapDockExpandFab,
                   {
-                    top: coordStackBelowHud + 6,
+                    top: mapToolsExpandFabTop,
                     backgroundColor: chrome.surface,
                     borderColor: chrome.border,
                     opacity: pressed ? 0.92 : 1,
@@ -2144,6 +2190,7 @@ export default function MapScreen() {
               onAccentLabel={onTintLabel}
               movementMph={routeEtaMph}
               onMovementMphChange={setRouteEtaMph}
+              onCommitFeature={commitGisFeature}
             />
           ) : selectedPin ? (
             <MapIntelPanel
@@ -2155,6 +2202,13 @@ export default function MapScreen() {
                 flyToCoords(selectedPin.lat, selectedPin.lng, 14);
               }}
               onAccentLabel={onTintLabel}
+              onDeleteMyMarker={
+                profileId &&
+                selectedPin.markerOwnerProfileId &&
+                selectedPin.markerOwnerProfileId === profileId
+                  ? () => void deleteTacticalMarkerRow(selectedPin.id)
+                  : undefined
+              }
             />
           ) : null}
           {!mapToolsDockCollapsed ? (
@@ -2223,6 +2277,7 @@ export default function MapScreen() {
               maxBottomPx={Math.round(windowH * 0.5)}
               movementMph={routeEtaMph}
               onMovementMphChange={setRouteEtaMph}
+              onCommitFeature={commitGisFeature}
             />
           ) : selectedPin ? (
             <MapIntelPanel
@@ -2236,6 +2291,13 @@ export default function MapScreen() {
               onAccentLabel={onTintLabel}
               scrollPanY
               maxBottomPx={Math.round(windowH * 0.5)}
+              onDeleteMyMarker={
+                profileId &&
+                selectedPin.markerOwnerProfileId &&
+                selectedPin.markerOwnerProfileId === profileId
+                  ? () => void deleteTacticalMarkerRow(selectedPin.id)
+                  : undefined
+              }
             />
           ) : null}
 
@@ -2326,7 +2388,8 @@ const styles = StyleSheet.create({
   mapDockExpandFab: {
     position: "absolute",
     right: 12,
-    zIndex: 1250,
+    /** Below crosshair coord panel (1200) when stacks collide after drag. */
+    zIndex: 1150,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,

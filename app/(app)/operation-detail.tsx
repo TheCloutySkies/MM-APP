@@ -46,6 +46,7 @@ type HubRow = {
   encrypted_payload: string;
   created_at: string;
   author_username: string;
+  author_id: string;
 };
 
 type ScopedOpsRow = {
@@ -54,6 +55,7 @@ type ScopedOpsRow = {
   created_at: string;
   doc_kind: OpsDocKind;
   author_username: string;
+  author_id: string;
 };
 
 type TabKey = "reports" | "brief";
@@ -97,13 +99,18 @@ export default function OperationDetailScreen() {
   const [showAar, setShowAar] = useState(false);
   const [showTarget, setShowTarget] = useState(false);
   const [showIntel, setShowIntel] = useState(false);
-  const [docDetail, setDocDetail] = useState<{ title: string; body: string; subtitle: string } | null>(null);
+  const [docDetail, setDocDetail] = useState<{
+    title: string;
+    body: string;
+    subtitle: string;
+    opsReportId?: string;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!supabase || !opId) return;
     const { data: h, error: eh } = await supabase
       .from("operation_hubs")
-      .select("id, encrypted_payload, created_at, author_username")
+      .select("id, encrypted_payload, created_at, author_username, author_id")
       .eq("id", opId)
       .maybeSingle();
     if (eh) {
@@ -114,7 +121,7 @@ export default function OperationDetailScreen() {
     }
     const { data: r, error: er } = await supabase
       .from("ops_reports")
-      .select("id, encrypted_payload, created_at, doc_kind, author_username")
+      .select("id, encrypted_payload, created_at, doc_kind, author_username, author_id")
       .eq("operation_id", opId)
       .order("created_at", { ascending: false });
     if (er) {
@@ -145,7 +152,17 @@ export default function OperationDetailScreen() {
   }, [hubRow, decryptCandidates]);
 
   const openReport = (row: ScopedOpsRow) => {
+    const ownReport = profileId != null && row.author_id === profileId;
     if (decryptCandidates.length === 0) {
+      if (ownReport) {
+        setDocDetail({
+          title: "Cannot decrypt",
+          body: OPS_TEAM_DECRYPT_HELP,
+          subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
+          opsReportId: row.id,
+        });
+        return;
+      }
       Alert.alert("Reports", "No decrypt key available. Set a team key in Settings or unlock your vault.");
       return;
     }
@@ -156,6 +173,7 @@ export default function OperationDetailScreen() {
         title: "Cannot decrypt",
         body: OPS_TEAM_DECRYPT_HELP,
         subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
+        opsReportId: ownReport ? row.id : undefined,
       });
       return;
     }
@@ -179,14 +197,39 @@ export default function OperationDetailScreen() {
         title: displayTitle,
         body,
         subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
+        opsReportId: ownReport ? row.id : undefined,
       });
     } catch {
       setDocDetail({
         title: "Cannot decrypt",
         body: OPS_TEAM_DECRYPT_HELP,
         subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
+        opsReportId: ownReport ? row.id : undefined,
       });
     }
+  };
+
+  const deleteThisOperationHub = () => {
+    if (!supabase || !profileId || !hubRow || hubRow.author_id !== profileId) return;
+    Alert.alert(
+      "Delete operation",
+      "This removes the operation hub. Reports in the hub stay on the server but are no longer grouped here.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const { error: delErr } = await supabase.from("operation_hubs").delete().eq("id", opId);
+            if (delErr) {
+              Alert.alert("Operation", delErr.message);
+              return;
+            }
+            router.back();
+          },
+        },
+      ],
+    );
   };
 
   if (!opId) {
@@ -205,8 +248,20 @@ export default function OperationDetailScreen() {
           <Text style={[styles.backTx, { color: p.tint }]}>Missions</Text>
         </Pressable>
       </View>
-      <Text style={[styles.h1, { color: p.text }]}>{hubTitle}</Text>
-      <Text style={[styles.sub, { color: p.tabIconDefault }]}>Scoped reports · {opId.slice(0, 8)}…</Text>
+      <View style={styles.titleRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.h1, { color: p.text }]}>{hubTitle}</Text>
+          <Text style={[styles.sub, { color: p.tabIconDefault }]}>Scoped reports · {opId.slice(0, 8)}…</Text>
+        </View>
+        {hubRow && profileId && hubRow.author_id === profileId ? (
+          <Pressable
+            onPress={deleteThisOperationHub}
+            hitSlop={10}
+            style={({ pressed }) => [styles.hubDeleteBtn, { opacity: pressed ? 0.85 : 1 }]}>
+            <Text style={styles.hubDeleteTx}>Delete hub</Text>
+          </Pressable>
+        ) : null}
+      </View>
 
       <View style={styles.tabs}>
         <Pressable
@@ -294,6 +349,30 @@ export default function OperationDetailScreen() {
         subtitle={docDetail?.subtitle}
         body={docDetail?.body ?? ""}
         onClose={() => setDocDetail(null)}
+        onDelete={
+          docDetail?.opsReportId && supabase
+            ? () => {
+                const id = docDetail.opsReportId!;
+                Alert.alert("Delete report", "Remove this report for everyone?", [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                      const { error: delErr } = await supabase.from("ops_reports").delete().eq("id", id);
+                      if (delErr) {
+                        Alert.alert("Reports", delErr.message);
+                        return;
+                      }
+                      setDocDetail(null);
+                      void refresh();
+                    },
+                  },
+                ]);
+              }
+            : undefined
+        }
+        deleteLabel="Delete my report"
       />
 
       <MissionPlanModal
@@ -360,6 +439,16 @@ const styles = StyleSheet.create({
   topBar: { marginBottom: 8 },
   backBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8 },
   backTx: { fontSize: 16, fontWeight: "700" },
+  titleRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 4 },
+  hubDeleteBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#b91c1c",
+    alignSelf: "flex-start",
+  },
+  hubDeleteTx: { fontSize: 12, fontWeight: "800", color: "#b91c1c" },
   h1: { fontSize: 22, fontWeight: "800" },
   sub: { fontSize: 13, marginTop: 4, marginBottom: 12 },
   tabs: { flexDirection: "row", gap: 10, marginBottom: 12 },

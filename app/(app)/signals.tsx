@@ -18,6 +18,7 @@ import { TacticalPalette } from "@/constants/TacticalTheme";
 import { base64ToBytes, bytesToBase64, hexToBytes, utf8, utf8decode } from "@/lib/crypto/bytes";
 import { idbDel, idbGet, idbSet } from "@/lib/signals/idb";
 import { aesGcmDecryptTextFromBundle, aesGcmEncryptTextToBundle, randomBytes } from "@/lib/signals/subtle";
+import { vigenereDecrypt, vigenereEncrypt } from "@/lib/signals/vigenere";
 import {
     exportPrivateKeyPkcs8,
     exportPublicKeySpkiB64,
@@ -117,7 +118,7 @@ type MethodBlurb = { title: string; how: string; goodFor: string; security: stri
 const METHODS_AT_A_GLANCE: MethodBlurb[] = [
   {
     title: "Field encodings",
-    how: "Morse maps letters to a dot-dash pattern. Vigenère reuses a keyword to shift letters each step. Base64 and hex turn raw bytes into text you can paste anywhere.",
+    how: "Morse maps letters to a dot-dash pattern. Vigenère applies the classical tabula-recta letter shifts with a repeating keyword (encrypt adds key, decrypt subtracts). Base64 and hex turn raw bytes into text you can paste anywhere.",
     goodFor: "Voice readbacks, cutting noise on busy text channels, moving small payloads through tools that hate binary.",
     security: "Low. This is classical ciphers and formats, not modern secrecy. Count on traffic analysis and guessing if an adversary gets the ciphertext.",
   },
@@ -267,7 +268,7 @@ function useQuickGuide(tab: SignalTabId, mode: Mode): { title: string; body: str
             "",
             "Included:",
             "- Morse encode/decode + optional tone on web.",
-            "- Vigenère cipher (keyword) for low-level concealment.",
+            "- Standard repeating-keyword Vigenère (Latin A–Z tabula recta) — real classical cipher, not a hash/XOR substitute.",
             "- Base64 and Hex utilities for moving binary-ish data over text channels.",
           ].join("\n"),
       };
@@ -1339,25 +1340,6 @@ function morseDecode(s: string): string {
     .join("");
 }
 
-function vigenere(text: string, key: string, dir: 1 | -1): string {
-  const k = key.toLowerCase().replace(/[^a-z]/g, "");
-  if (!k) return text;
-  let j = 0;
-  return text
-    .split("")
-    .map((ch) => {
-      const code = ch.toLowerCase().charCodeAt(0);
-      if (code < 97 || code > 122) return ch;
-      const shift = k.charCodeAt(j % k.length) - 97;
-      j++;
-      const a = code - 97;
-      const out = (a + dir * shift + 26 * 10) % 26;
-      const next = String.fromCharCode(97 + out);
-      return ch === ch.toUpperCase() ? next.toUpperCase() : next;
-    })
-    .join("");
-}
-
 function LegacyPane({ mode }: { mode: Mode }) {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
@@ -1374,7 +1356,7 @@ function LegacyPane({ mode }: { mode: Mode }) {
       }
       if (legacyTab === "vigenere") {
         if (!key.trim()) throw new Error("Keyword required.");
-        setOut(vigenere(src, key, mode === "encode" ? 1 : -1));
+        setOut(mode === "encode" ? vigenereEncrypt(src, key) : vigenereDecrypt(src, key));
         return;
       }
       if (legacyTab === "b64") {

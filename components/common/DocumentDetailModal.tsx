@@ -11,12 +11,23 @@ type Props = {
   subtitle?: string;
   body: string;
   onClose: () => void;
+  /** When set, shows a destructive control (caller should confirm if needed). */
+  onDelete?: () => void;
+  deleteLabel?: string;
 };
 
 /**
  * Full-screen readable document view (replaces Alert.alert for long ciphertext / web).
  */
-export function DocumentDetailModal({ visible, title, subtitle, body, onClose }: Props) {
+export function DocumentDetailModal({
+  visible,
+  title,
+  subtitle,
+  body,
+  onClose,
+  onDelete,
+  deleteLabel = "Delete my contribution",
+}: Props) {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
   const insets = useSafeAreaInsets();
@@ -60,6 +71,21 @@ export function DocumentDetailModal({ visible, title, subtitle, body, onClose }:
               {body || "—"}
             </Text>
           </View>
+          {onDelete ? (
+            <Pressable
+              onPress={onDelete}
+              accessibilityRole="button"
+              accessibilityLabel={deleteLabel}
+              style={({ pressed }) => [
+                styles.deleteBtn,
+                {
+                  borderColor: "#b91c1c",
+                  opacity: pressed ? 0.88 : 1,
+                },
+              ]}>
+              <Text style={[styles.deleteTx, { color: "#b91c1c" }]}>{deleteLabel}</Text>
+            </Pressable>
+          ) : null}
         </ScrollView>
       </View>
     </Modal>
@@ -87,4 +113,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(58, 66, 56, 0.15)",
   },
   body: { fontSize: 15, lineHeight: 22 },
+  deleteBtn: {
+    marginTop: 20,
+    borderWidth: 2,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  deleteTx: { fontSize: 15, fontWeight: "800" },
 });

@@ -1,5 +1,5 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import type { MapPin } from "@/components/map/mapTypes";
 import type { TacticalColors } from "@/constants/TacticalTheme";
@@ -16,6 +16,8 @@ type Props = {
   scrollPanY?: boolean;
   /** Mobile anchored panel height cap (px). */
   maxBottomPx?: number;
+  /** Remove this tactical marker row (map_markers.id === pin.id). Caller may no-op if not owner. */
+  onDeleteMyMarker?: () => void;
 };
 
 /** Rigid intel tray — Calcite “panel” pattern for marker details (desktop trailing / mobile anchored). */
@@ -28,6 +30,7 @@ export function MapIntelPanel({
   onAccentLabel,
   scrollPanY,
   maxBottomPx,
+  onDeleteMyMarker,
 }: Props) {
   const isTrailing = variant === "trailing";
 
@@ -79,6 +82,28 @@ export function MapIntelPanel({
           <FontAwesome name="crosshairs" size={14} color={onAccentLabel} />
           <Text style={[styles.primaryTx, { color: onAccentLabel }]}>Center map</Text>
         </Pressable>
+        {onDeleteMyMarker ? (
+          <Pressable
+            onPress={() =>
+              Alert.alert(
+                "Delete marker",
+                "Remove this tactical marker for everyone on the map?",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Delete", style: "destructive", onPress: onDeleteMyMarker },
+                ],
+              )
+            }
+            style={({ pressed }) => [
+              styles.deleteBtn,
+              { borderColor: "#b91c1c", opacity: pressed ? 0.9 : 1 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Delete my tactical marker">
+            <FontAwesome name="trash" size={14} color="#b91c1c" />
+            <Text style={styles.deleteTx}>Delete my marker</Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -146,4 +171,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800",
   },
+  deleteBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 2,
+    marginTop: 6,
+  },
+  deleteTx: { fontSize: 14, fontWeight: "800", color: "#b91c1c" },
 });

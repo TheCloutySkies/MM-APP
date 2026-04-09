@@ -12,7 +12,10 @@ export async function fetchProfileLayoutPreference(
     .eq("id", profileId)
     .maybeSingle();
   if (error || !data) return null;
-  return parseLayoutPreferenceValue(data.layout_preference as string | null);
+  const raw = data.layout_preference as string | null | undefined;
+  /** Treat unset column as “no server opinion” so device `localStorage` / secure store wins after reload. */
+  if (raw == null || String(raw).trim() === "") return null;
+  return parseLayoutPreferenceValue(raw);
 }
 
 export async function updateProfileLayoutPreference(

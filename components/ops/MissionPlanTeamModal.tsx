@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useEffect, useState } from "react";
 import {
     ActivityIndicator,
+    Alert,
     KeyboardAvoidingView,
     Modal,
     Platform,
@@ -19,6 +20,7 @@ import { OPS_COMMENT_AAD, type OpsCommentPayloadV1 } from "@/lib/opsReports";
 
 type CommentRow = {
   id: string;
+  author_id: string;
   author_username: string;
   encrypted_payload: string;
   created_at: string;
@@ -34,6 +36,8 @@ type Props = {
   profileId: string | null;
   username: string | null;
   mapKey: Uint8Array | null;
+  canDeletePlan?: boolean;
+  onDeletedPlan?: () => void;
 };
 
 export function MissionPlanTeamModal({
@@ -46,6 +50,8 @@ export function MissionPlanTeamModal({
   profileId,
   username,
   mapKey,
+  canDeletePlan = false,
+  onDeletedPlan,
 }: Props) {
   const [comments, setComments] = useState<CommentRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -64,7 +70,7 @@ export function MissionPlanTeamModal({
     try {
       const { data, error } = await supabase
         .from("ops_comments")
-        .select("id, author_username, encrypted_payload, created_at")
+        .select("id, author_id, author_username, encrypted_payload, created_at")
         .eq("ops_report_id", opsReportId)
         .order("created_at", { ascending: true });
       if (error) {
@@ -81,6 +87,27 @@ export function MissionPlanTeamModal({
   useEffect(() => {
     if (visible) void loadComments();
   }, [visible, loadComments]);
+
+  const deletePlan = async () => {
+    if (!supabase || !opsReportId || !canDeletePlan) return;
+    const { error } = await supabase.from("ops_reports").delete().eq("id", opsReportId);
+    if (error) {
+      console.warn(error.message);
+      return;
+    }
+    onClose();
+    onDeletedPlan?.();
+  };
+
+  const deleteComment = async (commentId: string) => {
+    if (!supabase) return;
+    const { error } = await supabase.from("ops_comments").delete().eq("id", commentId);
+    if (error) {
+      console.warn(error.message);
+      return;
+    }
+    await loadComments();
+  };
 
   const postComment = async () => {
     if (!canComment || !draft.trim()) return;
@@ -129,6 +156,21 @@ export function MissionPlanTeamModal({
             <Text style={[styles.body, { color: bodyColor }]} selectable>
               {bodyText}
             </Text>
+            {canDeletePlan && opsReportId ? (
+              <Pressable
+                onPress={() =>
+                  Alert.alert("Delete mission plan", "Remove this encrypted plan for everyone?", [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Delete", style: "destructive", onPress: () => void deletePlan() },
+                  ])
+                }
+                style={({ pressed }) => [
+                  styles.deletePlanBtn,
+                  { borderColor: "#b91c1c", opacity: pressed ? 0.88 : 1 },
+                ]}>
+                <Text style={styles.deletePlanTx}>Delete my mission plan</Text>
+              </Pressable>
+            ) : null}
             {opsReportId ? (
               <>
                 <Text style={[styles.sectionLabel, { color: metaColor }]}>Team comments</Text>
@@ -143,6 +185,7 @@ export function MissionPlanTeamModal({
                   } catch {
                     line = "(cannot decrypt)";
                   }
+                  const ownComment = profileId != null && c.author_id === profileId;
                   return (
                     <View key={c.id} style={[styles.commentCard, { borderColor: TacticalPalette.border }]}>
                       <Text style={[styles.commentMeta, { color: metaColor }]}>
@@ -151,6 +194,18 @@ export function MissionPlanTeamModal({
                       <Text style={[styles.commentBody, { color: bodyColor }]} selectable>
                         {line}
                       </Text>
+                      {ownComment ? (
+                        <Pressable
+                          onPress={() =>
+                            Alert.alert("Delete comment", "Remove your comment?", [
+                              { text: "Cancel", style: "cancel" },
+                              { text: "Delete", style: "destructive", onPress: () => void deleteComment(c.id) },
+                            ])
+                          }
+                          style={{ marginTop: 8, alignSelf: "flex-start" }}>
+                          <Text style={{ color: "#b91c1c", fontWeight: "800", fontSize: 12 }}>Delete my comment</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   );
                 })}
@@ -224,6 +279,14 @@ const styles = StyleSheet.create({
   scroll: { maxHeight: 560 },
   scrollInner: { padding: 16, paddingBottom: 32 },
   body: { fontSize: 15, lineHeight: 22, marginBottom: 20 },
+  deletePlanBtn: {
+    marginBottom: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 2,
+    alignItems: "center",
+  },
+  deletePlanTx: { color: "#b91c1c", fontWeight: "800", fontSize: 14 },
   sectionLabel: {
     fontSize: 11,
     fontWeight: "800",

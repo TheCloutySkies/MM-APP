@@ -1,18 +1,28 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useState,
+    type ReactNode,
+} from "react";
 import { ActivityIndicator, Platform, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import {
-  getLayoutPreferenceAsync,
-  reloadWebApp,
-  resolveDesktopFromLayoutPref,
-  type LayoutPreference,
+    getLayoutPreference,
+    getLayoutPreferenceAsync,
+    reloadWebApp,
+    resolveDesktopFromLayoutPref,
+    type LayoutPreference,
 } from "@/lib/layout/layoutPreference";
-import {
-  fetchProfileLayoutPreference,
-  updateProfileLayoutPreference,
-} from "@/lib/supabase/profileLayout";
 import { getAuthSupabase } from "@/lib/supabase/authSupabase";
+import {
+    fetchProfileLayoutPreference,
+    updateProfileLayoutPreference,
+} from "@/lib/supabase/profileLayout";
 import { useMMStore } from "@/store/mmStore";
 
 type LayoutController = {
@@ -40,6 +50,25 @@ export function useLayoutContextOptional(): LayoutController | null {
 
 type Props = { children: ReactNode };
 
+/**
+ * Merge server `mm_profiles.layout_preference` with device storage so an unset/`auto` DB row does not
+ * wipe Mobile/Desktop chosen before reload (common if the profile column defaults or update lags).
+ */
+async function resolveMergedLayoutPreference(
+  supabase: Parameters<typeof fetchProfileLayoutPreference>[0],
+  profileId: string,
+): Promise<LayoutPreference> {
+  const remote = await fetchProfileLayoutPreference(supabase, profileId);
+  const local = await getLayoutPreferenceAsync();
+  if (remote == null) return local;
+  if ((local === "mobile" || local === "desktop") && remote === "auto") {
+    const { error: upErr } = await updateProfileLayoutPreference(supabase, profileId, local);
+    if (upErr) console.warn("[layout] profile upsync after local override failed:", upErr.message);
+    return local;
+  }
+  return remote;
+}
+
 export function LayoutProvider({ children }: Props) {
   const hydrated = useMMStore((s) => s.hydrated);
   const accessToken = useMMStore((s) => s.accessToken);
@@ -50,6 +79,12 @@ export function LayoutProvider({ children }: Props) {
   const [preference, setPreference] = useState<LayoutPreference>("auto");
   const [layoutBootstrapReady, setLayoutBootstrapReady] = useState(false);
   const { width } = useWindowDimensions();
+
+  /** Read persisted layout on the client before paint to avoid a flash of “auto” and odd unlock UI. */
+  useLayoutEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    setPreference(getLayoutPreference());
+  }, []);
 
   const effectiveDesktop = useMemo(
     () => resolveDesktopFromLayoutPref(width, preference),
@@ -77,15 +112,10 @@ export function LayoutProvider({ children }: Props) {
 
     setLayoutBootstrapReady(false);
     void (async () => {
-      const remote = await fetchProfileLayoutPreference(supabase, profileId);
+      const next = await resolveMergedLayoutPreference(supabase, profileId);
       if (cancelled) return;
-      if (remote != null) {
-        await setLayoutTriPreference(remote);
-        setPreference(remote);
-      } else {
-        await finishLocal();
-        return;
-      }
+      await setLayoutTriPreference(next);
+      setPreference(next);
       if (!cancelled) setLayoutBootstrapReady(true);
     })();
 
@@ -101,11 +131,9 @@ export function LayoutProvider({ children }: Props) {
     } = client.auth.onAuthStateChange(async (event, session) => {
       if (event !== "SIGNED_IN" || !session?.user) return;
       const authClient = getAuthSupabase();
-      const pref = await fetchProfileLayoutPreference(authClient, session.user.id);
-      if (pref != null) {
-        await useMMStore.getState().setLayoutTriPreference(pref);
-        setPreference(pref);
-      }
+      const next = await resolveMergedLayoutPreference(authClient, session.user.id);
+      await useMMStore.getState().setLayoutTriPreference(next);
+      setPreference(next);
     });
     return () => subscription.unsubscribe();
   }, []);

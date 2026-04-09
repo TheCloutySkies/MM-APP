@@ -28,7 +28,7 @@ import {
 } from "@/lib/opsReports";
 import { collectOpsDecryptCandidates, resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
-type LegacyMissionRow = { id: string; ciphertext: string; created_at: string };
+type LegacyMissionRow = { id: string; ciphertext: string; created_at: string; owner_id: string };
 
 type OpsRow = {
   id: string;
@@ -36,10 +36,11 @@ type OpsRow = {
   created_at: string;
   doc_kind: OpsDocKind;
   author_username: string;
+  author_id: string;
 };
 
 type CombinedRow =
-  | { source: "legacy"; id: string; created_at: string; ciphertext: string }
+  | { source: "legacy"; id: string; created_at: string; ciphertext: string; owner_id: string }
   | {
       source: "ops";
       id: string;
@@ -47,6 +48,7 @@ type CombinedRow =
       doc_kind: OpsDocKind;
       encrypted_payload: string;
       author_username: string;
+      author_id: string;
     };
 
 type HubRow = {
@@ -54,6 +56,7 @@ type HubRow = {
   encrypted_payload: string;
   created_at: string;
   author_username: string;
+  author_id: string;
 };
 
 export default function MissionsScreen() {
@@ -96,20 +99,21 @@ export default function MissionsScreen() {
     headerTitle: string;
     bodyText: string;
     opsReportId: string;
+    planAuthorId: string;
   } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!supabase) return;
     const [legacyRes, opsRes, hubsRes] = await Promise.all([
-      supabase.from("missions").select("id, ciphertext, created_at").order("created_at", { ascending: false }),
+      supabase.from("missions").select("id, ciphertext, created_at, owner_id").order("created_at", { ascending: false }),
       supabase
         .from("ops_reports")
-        .select("id, encrypted_payload, created_at, doc_kind, author_username")
+        .select("id, encrypted_payload, created_at, doc_kind, author_username, author_id")
         .eq("doc_kind", "mission_plan")
         .order("created_at", { ascending: false }),
       supabase
         .from("operation_hubs")
-        .select("id, encrypted_payload, created_at, author_username")
+        .select("id, encrypted_payload, created_at, author_username, author_id")
         .order("created_at", { ascending: false }),
     ]);
     if (legacyRes.error) {
@@ -144,6 +148,7 @@ export default function MissionsScreen() {
       id: r.id,
       created_at: r.created_at,
       ciphertext: r.ciphertext,
+      owner_id: r.owner_id,
     }));
     const O: CombinedRow[] = opsRows.map((r) => ({
       source: "ops",
@@ -152,9 +157,53 @@ export default function MissionsScreen() {
       doc_kind: r.doc_kind,
       encrypted_payload: r.encrypted_payload,
       author_username: r.author_username,
+      author_id: r.author_id,
     }));
     return [...O, ...L].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   }, [legacyRows, opsRows]);
+
+  const deleteLegacyMission = async (id: string) => {
+    if (!supabase) return;
+    const { error: delErr } = await supabase.from("missions").delete().eq("id", id);
+    if (delErr) Alert.alert("Missions", delErr.message);
+    else void refresh();
+  };
+
+  const deleteOpsMissionRow = (reportId: string) => {
+    if (!supabase) return;
+    Alert.alert("Delete mission plan", "Remove this encrypted team plan for everyone?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          const { error: delErr } = await supabase.from("ops_reports").delete().eq("id", reportId);
+          if (delErr) Alert.alert("Missions", delErr.message);
+          else void refresh();
+        },
+      },
+    ]);
+  };
+
+  const deleteHub = (hub: HubRow) => {
+    if (!supabase || !profileId || hub.author_id !== profileId) return;
+    Alert.alert(
+      "Delete operation",
+      "Remove this operation hub and its dashboard shell. Team reports you filed stay on the server (ungrouped).",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const { error: delErr } = await supabase.from("operation_hubs").delete().eq("id", hub.id);
+            if (delErr) Alert.alert("Missions", delErr.message);
+            else void refresh();
+          },
+        },
+      ],
+    );
+  };
 
   const openRow = (item: CombinedRow) => {
     try {
@@ -166,10 +215,22 @@ export default function MissionsScreen() {
         const json = decryptUtf8(activeVaultKey, item.ciphertext, "mm-mission");
         const body = JSON.parse(json) as { name?: string; members?: string[] };
         const members = Array.isArray(body.members) ? body.members.join(", ") : "";
-        Alert.alert(
-          body.name ?? "Mission",
-          [members && `Members: ${members}`, "Legacy private mission (pre–team ops table)."].filter(Boolean).join("\n"),
-        );
+        const ownLegacy = profileId != null && item.owner_id === profileId;
+        const msg = [members && `Members: ${members}`, "Legacy private mission (pre–team ops table)."]
+          .filter(Boolean)
+          .join("\n");
+        if (ownLegacy) {
+          Alert.alert(body.name ?? "Mission", msg, [
+            { text: "Close", style: "cancel" },
+            {
+              text: "Delete legacy mission",
+              style: "destructive",
+              onPress: () => void deleteLegacyMission(item.id),
+            },
+          ]);
+        } else {
+          Alert.alert(body.name ?? "Mission", msg);
+        }
         return;
       }
       if (decryptCandidates.length === 0) {
@@ -193,6 +254,7 @@ export default function MissionsScreen() {
         headerTitle: `${parsed.title} · ${item.author_username}`,
         bodyText: formatMissionForDisplay(parsed),
         opsReportId: item.id,
+        planAuthorId: item.author_id,
       });
     } catch {
       Alert.alert("Missions", "Cannot decrypt (wrong key or author used different partition).");
@@ -256,21 +318,30 @@ export default function MissionsScreen() {
               title = "(cannot decrypt)";
             }
           }
+          const ownHub = profileId != null && item.author_id === profileId;
           return (
-            <Pressable
-              key={item.id}
-              style={[styles.card, { borderColor: p.tabIconDefault, marginBottom: 8 }]}
-              onPress={() =>
-                router.push({
-                  pathname: "/(app)/operation-detail",
-                  params: { id: item.id },
-                })
-              }>
-              <Text style={{ color: p.text, fontWeight: "700" }}>{title}</Text>
-              <Text style={{ color: p.tabIconDefault, fontSize: 12 }}>
-                {item.author_username} · {item.created_at}
-              </Text>
-            </Pressable>
+            <View key={item.id} style={[styles.card, { borderColor: p.tabIconDefault, marginBottom: 8 }]}>
+              <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: "/(app)/operation-detail",
+                    params: { id: item.id },
+                  })
+                }>
+                <Text style={{ color: p.text, fontWeight: "700" }}>{title}</Text>
+                <Text style={{ color: p.tabIconDefault, fontSize: 12 }}>
+                  {item.author_username} · {item.created_at}
+                </Text>
+              </Pressable>
+              {ownHub ? (
+                <Pressable
+                  onPress={() => deleteHub(item)}
+                  style={{ marginTop: 10, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 10 }}
+                  hitSlop={8}>
+                  <Text style={{ color: "#b91c1c", fontWeight: "800", fontSize: 13 }}>Delete my operation hub</Text>
+                </Pressable>
+              ) : null}
+            </View>
           );
         })}
 
@@ -298,14 +369,22 @@ export default function MissionsScreen() {
               title = "(locked)";
             }
           }
+          const ownOpsPlan = item.source === "ops" && profileId != null && item.author_id === profileId;
           return (
-            <Pressable
-              key={`${item.source}-${item.id}`}
-              style={[styles.card, { borderColor: p.tabIconDefault }]}
-              onPress={() => openRow(item)}>
-              <Text style={{ color: p.text, fontWeight: "700" }}>{title}</Text>
-              <Text style={{ color: p.tabIconDefault, fontSize: 12 }}>{sub}</Text>
-            </Pressable>
+            <View key={`${item.source}-${item.id}`} style={[styles.card, { borderColor: p.tabIconDefault }]}>
+              <Pressable onPress={() => openRow(item)}>
+                <Text style={{ color: p.text, fontWeight: "700" }}>{title}</Text>
+                <Text style={{ color: p.tabIconDefault, fontSize: 12 }}>{sub}</Text>
+              </Pressable>
+              {ownOpsPlan ? (
+                <Pressable
+                  onPress={() => deleteOpsMissionRow(item.id)}
+                  style={{ marginTop: 10, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 10 }}
+                  hitSlop={8}>
+                  <Text style={{ color: "#b91c1c", fontWeight: "800", fontSize: 13 }}>Delete my mission plan</Text>
+                </Pressable>
+              ) : null}
+            </View>
           );
         })}
 
@@ -350,6 +429,13 @@ export default function MissionsScreen() {
         profileId={profileId}
         username={username}
         mapKey={mapKey}
+        canDeletePlan={
+          !!(teamMission && profileId && teamMission.planAuthorId === profileId && teamMission.opsReportId)
+        }
+        onDeletedPlan={() => {
+          setTeamMission(null);
+          void refresh();
+        }}
       />
     </View>
   );

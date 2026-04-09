@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Alert, Platform, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import MapView, {
     MAP_TYPES,
     Marker,
@@ -8,6 +8,7 @@ import MapView, {
     PROVIDER_DEFAULT,
     UrlTile,
 } from "react-native-maps";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type {
     MapBaseLayerId,
@@ -75,6 +76,7 @@ export function TacticalMap({
   onPinSelect,
 }: Props) {
   const mapRef = useRef<MapView>(null);
+  const insets = useSafeAreaInsets();
   const baseMapType =
     Platform.OS === "android" ? MAP_TYPES.NONE : MAP_TYPES.MUTEDSTANDARD;
 
@@ -211,6 +213,32 @@ export function TacticalMap({
           ]}
         />
       ) : null}
+      {userLocation ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Zoom to current location"
+          onPress={() => {
+            const z = 15;
+            const { latitudeDelta, longitudeDelta } = zoomToDeltas(userLocation.lat, z);
+            mapRef.current?.animateToRegion(
+              {
+                latitude: userLocation.lat,
+                longitude: userLocation.lng,
+                latitudeDelta,
+                longitudeDelta,
+              },
+              650,
+            );
+          }}
+          style={[
+            styles.locateFab,
+            {
+              bottom: 88 + Math.max(insets.bottom, 8),
+            },
+          ]}>
+          <Text style={styles.locateFabIcon}>⌖</Text>
+        </Pressable>
+      ) : null}
       <View style={styles.attribution} pointerEvents="none">
         <Text style={styles.attributionText}>© OpenStreetMap contributors</Text>
       </View>
@@ -220,6 +248,26 @@ export function TacticalMap({
 
 const styles = StyleSheet.create({
   fill: { flex: 1, minHeight: 0 },
+  /** Mirrors web Leaflet stack: locate above bottom-right chrome (approx. zoom / map controls). */
+  locateFab: {
+    position: "absolute",
+    right: 12,
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,255,255,0.96)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 5,
+    elevation: 6,
+  },
+  locateFabIcon: {
+    fontSize: 18,
+    color: "#333",
+    lineHeight: 20,
+  },
   attribution: {
     position: "absolute",
     right: 6,

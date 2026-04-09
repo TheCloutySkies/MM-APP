@@ -177,6 +177,7 @@ export function tacticPayloadToLayers(
   rowId: string,
   payload: TacticalMapPayload,
   stale: boolean,
+  markerOwnerProfileId?: string | null,
 ): TacticalLayers {
   const tint = tacCategoryTint(payload.category);
   const head = payload.title?.trim() || tacCategoryLabel(payload.category);
@@ -196,6 +197,7 @@ export function tacticPayloadToLayers(
           title,
           subtitle,
           tint: pinTint,
+          markerOwnerProfileId: markerOwnerProfileId ?? null,
         },
       ],
       polylines: [],
@@ -210,7 +212,9 @@ export function tacticPayloadToLayers(
     }));
     return {
       pins: [],
-      polylines: [{ id: rowId, coordinates, color: tint, title, subtitle }],
+      polylines: [
+        { id: rowId, coordinates, color: tint, title, subtitle, markerOwnerProfileId: markerOwnerProfileId ?? null },
+      ],
       polygons: [],
     };
   }
@@ -238,6 +242,7 @@ export function tacticPayloadToLayers(
         fillColor: hexToRgba(tint, 0.22),
         title,
         subtitle,
+        markerOwnerProfileId: markerOwnerProfileId ?? null,
       },
     ],
   };

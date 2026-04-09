@@ -23,6 +23,7 @@ import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStor
 
 type Row = {
   id: string;
+  author_id: string;
   author_username: string;
   encrypted_payload: string;
   created_at: string;
@@ -49,13 +50,19 @@ export default function BulletinScreen() {
   const [rows, setRows] = useState<Row[]>([]);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [detail, setDetail] = useState<{ title: string; body: string; meta: string } | null>(null);
+  const [detail, setDetail] = useState<{
+    title: string;
+    body: string;
+    meta: string;
+    postId: string;
+    authorId: string;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("bulletin_posts")
-      .select("id, author_username, encrypted_payload, created_at")
+      .select("id, author_id, author_username, encrypted_payload, created_at")
       .order("created_at", { ascending: false });
     if (error) {
       Alert.alert("Bulletin", error.message);
@@ -109,6 +116,8 @@ export default function BulletinScreen() {
         title: o.title,
         body: o.body,
         meta: `${row.author_username} · ${row.created_at}`,
+        postId: row.id,
+        authorId: row.author_id,
       });
     } catch {
       Alert.alert("Bulletin", "Cannot decrypt with current key.");
@@ -216,6 +225,30 @@ export default function BulletinScreen() {
         subtitle={detail?.meta}
         body={detail?.body ?? ""}
         onClose={() => setDetail(null)}
+        onDelete={
+          detail && profileId && detail.authorId === profileId
+            ? () => {
+                Alert.alert("Delete post", "Remove this bulletin post for everyone?", [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                      if (!supabase) return;
+                      const { error: delErr } = await supabase.from("bulletin_posts").delete().eq("id", detail.postId);
+                      if (delErr) {
+                        Alert.alert("Bulletin", delErr.message);
+                        return;
+                      }
+                      setDetail(null);
+                      void refresh();
+                    },
+                  },
+                ]);
+              }
+            : undefined
+        }
+        deleteLabel="Delete my post"
       />
     </KeyboardAvoidingView>
   );

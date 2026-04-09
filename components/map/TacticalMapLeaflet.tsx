@@ -251,6 +251,8 @@ function TacticalMapLeaflet({
 
   const containerRef = useRef<View>(null);
   const mapRef = useRef<L.Map | null>(null);
+  /** Locate-to-GPS button inside Leaflet control bar — updated from `paintAll` when fixes arrive. */
+  const locateControlLinkRef = useRef<HTMLAnchorElement | null>(null);
   const tileRef = useRef<L.TileLayer | null>(null);
   const hybridLabelsRef = useRef<L.TileLayer | null>(null);
   const layerRef = useRef<L.LayerGroup | null>(null);
@@ -349,6 +351,14 @@ function TacticalMapLeaflet({
         .bindPopup(popupHtml("Your position", "Live GPS / geolocation"))
         .addTo(group);
     }
+
+    const locLink = locateControlLinkRef.current;
+    if (locLink) {
+      const has = Boolean(userLocRef.current);
+      locLink.style.opacity = has ? "1" : "0.42";
+      locLink.style.cursor = has ? "pointer" : "default";
+      locLink.setAttribute("aria-disabled", has ? "false" : "true");
+    }
   };
 
   useEffect(() => {
@@ -357,7 +367,41 @@ function TacticalMapLeaflet({
 
     const map = L.map(el, { scrollWheelZoom: true, zoomControl: false }).setView([39.5, -120.2], 7);
     mapRef.current = map;
+    /** Zoom first so it sits flush to the corner; locate is added second and stacks above (+/−). */
     L.control.zoom({ position: "bottomright" }).addTo(map);
+
+    const LocateCtrl = L.Control.extend({
+      options: { position: "bottomright" },
+      onAdd(ctrlMap: L.Map) {
+        const container = L.DomUtil.create("div", "leaflet-bar leaflet-control");
+        const link = L.DomUtil.create("a", "", container) as HTMLAnchorElement;
+        link.href = "#";
+        link.title = "Zoom to current location";
+        link.setAttribute("aria-label", "Zoom to current location");
+        link.style.display = "flex";
+        link.style.alignItems = "center";
+        link.style.justifyContent = "center";
+        link.innerHTML =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>';
+        const onLocate = (e: Event) => {
+          L.DomEvent.stopPropagation(e);
+          L.DomEvent.preventDefault(e);
+          const u = userLocRef.current;
+          if (!u) return;
+          const z = Math.max(ctrlMap.getZoom(), 15);
+          ctrlMap.flyTo([u.lat, u.lng], z, { duration: 1 });
+        };
+        L.DomEvent.on(link, "click", onLocate);
+        L.DomEvent.disableClickPropagation(container);
+        L.DomEvent.disableScrollPropagation(container);
+        locateControlLinkRef.current = link;
+        return container;
+      },
+      onRemove() {
+        locateControlLinkRef.current = null;
+      },
+    });
+    new LocateCtrl().addTo(map);
 
     if (baseLayer === "hybrid") {
       const sat = makeSatelliteLayer();
@@ -410,6 +454,7 @@ function TacticalMapLeaflet({
 
     return () => {
       cancelAnimationFrame(t);
+      locateControlLinkRef.current = null;
       map.off("contextmenu", onCtx);
       map.off("click", onMapClick);
       map.off("moveend", emitCenter);

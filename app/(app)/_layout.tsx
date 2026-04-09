@@ -1,12 +1,15 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Tabs } from "expo-router";
 import type { ComponentProps } from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import { useState } from "react";
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { TacticalClockBadge } from "@/components/chrome/TacticalClockBadge";
+import { LiveCommsPanel } from "@/components/comms/LiveCommsPanel";
 import { MMTabBar } from "@/components/navigation/MMTabBar";
 import { OpsScreeningGate } from "@/components/ops/OpsScreeningGate";
 import { ScorchedEarthListener } from "@/components/ScorchedEarthListener";
+import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useDeadManMonitor } from "@/hooks/useDeadManMonitor";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { useMMStore } from "@/store/mmStore";
@@ -23,11 +26,15 @@ export default function AppLayout() {
 
   const isWebDesk = Platform.OS === "web" && desktopMode;
   const theme = useTacticalChrome();
+  const [commsSheetOpen, setCommsSheetOpen] = useState(false);
+  const COMM_RAIL_W = 320;
 
   return (
     <View style={styles.shell}>
       <ScorchedEarthListener />
       <OpsScreeningGate />
+      <View style={styles.mainRow}>
+        <View style={styles.tabsColumn}>
       <Tabs
         tabBar={(props) => <MMTabBar {...props} />}
         screenOptions={{
@@ -155,10 +162,70 @@ export default function AppLayout() {
         />
       </Tabs>
       <TacticalClockBadge />
+        </View>
+
+        {Platform.OS === "web" && isWebDesk ? (
+          <View
+            style={{
+              width: COMM_RAIL_W,
+              flexShrink: 0,
+              borderLeftWidth: StyleSheet.hairlineWidth,
+              borderLeftColor: theme.border,
+              backgroundColor: TacticalPalette.matteBlack,
+            }}>
+            <LiveCommsPanel variant="trailing" />
+          </View>
+        ) : null}
+      </View>
+
+      {Platform.OS === "web" && !isWebDesk ? (
+        <>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open encrypted live comms"
+            onPress={() => setCommsSheetOpen(true)}
+            style={({ pressed }) => [
+              styles.commsFab,
+              {
+                backgroundColor: theme.tint,
+                opacity: pressed ? 0.9 : 1,
+              },
+            ]}>
+            <FontAwesome name="comments" size={20} color={TacticalPalette.matteBlack} />
+            <Text style={styles.commsFabTx}>Comms</Text>
+          </Pressable>
+          <Modal
+            visible={commsSheetOpen}
+            animationType="slide"
+            presentationStyle="fullScreen"
+            onRequestClose={() => setCommsSheetOpen(false)}>
+            <View style={{ flex: 1, backgroundColor: TacticalPalette.matteBlack }}>
+              <LiveCommsPanel variant="sheet" onCloseSheet={() => setCommsSheetOpen(false)} />
+            </View>
+          </Modal>
+        </>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   shell: { flex: 1 },
+  mainRow: { flex: 1, flexDirection: "row", minWidth: 0 },
+  tabsColumn: { flex: 1, minWidth: 0 },
+  commsFab: {
+    position: "absolute",
+    right: 16,
+    bottom: 88,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 999,
+    elevation: 8,
+    zIndex: 50,
+    ...(Platform.OS === "web" ? { boxShadow: "0 4px 14px rgba(0,0,0,0.35)" } : {}),
+  },
+  commsFabTx: { fontWeight: "900", fontSize: 14, color: TacticalPalette.matteBlack },
 });

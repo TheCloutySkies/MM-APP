@@ -28,3 +28,19 @@ export function appendFeature(fc: FeatureCollection, f: Feature): FeatureCollect
     features: [...fc.features, feature],
   };
 }
+
+/** Replace a feature with the same `properties.mmId` (or append if missing). */
+export function upsertFeatureInCollection(fc: FeatureCollection, next: Feature): FeatureCollection {
+  const mmId = String((next.properties as Record<string, unknown>)?.mmId ?? "");
+  const fixed = ensureFeatureId(next);
+  if (!mmId) {
+    return { ...fc, features: [...fc.features, fixed] };
+  }
+  const i = fc.features.findIndex((f) => String((f.properties as Record<string, unknown>)?.mmId) === mmId);
+  if (i === -1) {
+    return { ...fc, features: [...fc.features, fixed] };
+  }
+  const features = fc.features.slice();
+  features[i] = fixed;
+  return { ...fc, features };
+}

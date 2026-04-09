@@ -11,6 +11,8 @@ export type MapPin = {
   /** Shown under title (callout / popup) — e.g. creator, notes. */
   subtitle?: string;
   tint: string;
+  /** `map_markers.profile_id` when this pin came from tactical data (not OSINT / team live). */
+  markerOwnerProfileId?: string | null;
 };
 
 export type MapPolylineOverlay = {
@@ -21,6 +23,7 @@ export type MapPolylineOverlay = {
   subtitle?: string;
   /** Leaflet dash pattern e.g. `"8 6"` for draft lines */
   lineDash?: string;
+  markerOwnerProfileId?: string | null;
 };
 
 export type MapPolygonOverlay = {
@@ -30,6 +33,7 @@ export type MapPolygonOverlay = {
   fillColor: string;
   title: string;
   subtitle?: string;
+  markerOwnerProfileId?: string | null;
 };
 
 /** Increment `seq` on each navigation so the map animates even when coordinates repeat. */

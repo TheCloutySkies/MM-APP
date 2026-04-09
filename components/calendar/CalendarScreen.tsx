@@ -35,9 +35,14 @@ import {
     type CalendarEventPlain,
     type CalendarEventType,
 } from "@/lib/calendar/calendarTypes";
+import { ensureMmCalendarSession } from "@/lib/calendar/ensureMmCalendarSession";
 import { SK, secureSet } from "@/lib/secure/mmSecureStore";
 import { fetchCalendarProfileRow } from "@/lib/supabase/calendarProfile";
 import { useMMStore } from "@/store/mmStore";
+
+/** Fixed keypad button size — avoids SSR/client `useWindowDimensions` mismatch (React #418). */
+const PIN_PAD_KEY_W = 72;
+const PIN_PAD_KEY_H = 40;
 
 function monthMatrix(viewMonth: Date): (number | null)[][] {
   const first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
@@ -59,6 +64,7 @@ function sameDay(a: Date, d: number, m: Date): boolean {
 export function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+  const hydrated = useMMStore((s) => s.hydrated);
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
 
@@ -124,7 +130,7 @@ export function CalendarScreen() {
   );
 
   useEffect(() => {
-    void useMMStore.getState().reconcileProfileIdFromJwt();
+    void ensureMmCalendarSession();
   }, []);
 
   useEffect(() => {
@@ -172,10 +178,9 @@ export function CalendarScreen() {
       setPinError("Enter a valid PIN.");
       return;
     }
-    await useMMStore.getState().reconcileProfileIdFromJwt();
-    const { profileId: pid, supabase: sb } = useMMStore.getState();
+    const { profileId: pid, supabase: sb } = await ensureMmCalendarSession();
     if (!pid) {
-      setPinError("Not signed in.");
+      setPinError("Not signed in. Open another tab and sign in, then try again.");
       return;
     }
     setBusy(true);
@@ -261,15 +266,47 @@ export function CalendarScreen() {
     await reloadForMode(calMode);
   };
 
-  const cellSize = Math.min(44, Math.floor((width - 32) / 7));
+  const cellSizeApp = Math.min(44, Math.floor((width - 32) / 7));
+
+  if (!hydrated) {
+    return (
+      <View
+        style={[
+          styles.shell,
+          { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24, justifyContent: "center" },
+        ]}>
+        <ActivityIndicator size="large" color={TacticalPalette.coyote} />
+        <Text style={[styles.sub, { textAlign: "center", marginTop: 16 }]}>Restoring session…</Text>
+      </View>
+    );
+  }
 
   if (phase === "pin") {
     return (
       <View style={[styles.shell, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
         <Text style={styles.hdr}>Secure calendar</Text>
-        <Text style={styles.sub}>Enter your numeric PIN. Routing is verified on-device; keys are wiped when you leave this tab.</Text>
+        <Text style={styles.sub}>
+          Enter your numeric PIN (type below or use the keypad). Routing is verified on-device; keys are wiped when you
+          leave this tab.
+        </Text>
         {pinError ? <Text style={styles.err}>{pinError}</Text> : null}
-        <Text style={styles.pinDots}>{pinText ? "•".repeat(pinText.length) : "—"}</Text>
+        <TextInput
+          value={pinText}
+          onChangeText={(t) => setPinText(t.replace(/\D/g, "").slice(0, 12))}
+          keyboardType={Platform.OS === "web" ? "default" : "number-pad"}
+          secureTextEntry
+          textContentType="password"
+          autoComplete="off"
+          autoCorrect={false}
+          autoCapitalize="none"
+          importantForAutofill="no"
+          placeholder="PIN"
+          placeholderTextColor={TacticalPalette.boneMuted}
+          style={styles.pinInput}
+          editable={!busy}
+          onSubmitEditing={() => void onSubmitPin()}
+          returnKeyType="done"
+        />
         <View style={styles.pad}>
           {(
             [
@@ -294,7 +331,7 @@ export function CalendarScreen() {
                 if (k === "del") setPinText((p) => p.slice(0, -1));
                 else if (k) setPinText((p) => (p.length < 12 ? p + k : p));
               }}
-              style={[styles.key, { width: cellSize * 2.2, height: cellSize * 1.1 }, k === "" && styles.keyGhost]}>
+              style={[styles.key, { width: PIN_PAD_KEY_W, height: PIN_PAD_KEY_H }, k === "" && styles.keyGhost]}>
               {k === "del" ? (
                 <Text style={styles.keyTx}>{"\u232b"}</Text>
               ) : k ? (
@@ -342,7 +379,7 @@ export function CalendarScreen() {
 
       <View style={styles.weekRow}>
         {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-          <Text key={`${d}-${i}`} style={[styles.weekCell, { width: cellSize }]}>
+          <Text key={`${d}-${i}`} style={[styles.weekCell, { width: cellSizeApp }]}>
             {d}
           </Text>
         ))}
@@ -356,7 +393,7 @@ export function CalendarScreen() {
               onPress={() => d != null && setSelectedDay(d)}
               style={[
                 styles.dayCell,
-                { width: cellSize, minHeight: cellSize },
+                { width: cellSizeApp, minHeight: cellSizeApp },
                 d === selectedDay && styles.daySelected,
               ]}>
               <Text style={[styles.dayTx, d == null && { opacity: 0 }]}>{d ?? ""}</Text>
@@ -451,7 +488,18 @@ const styles = StyleSheet.create({
   hdrSm: { fontSize: 17, fontWeight: "800", color: TacticalPalette.bone },
   sub: { fontSize: 13, color: TacticalPalette.boneMuted, lineHeight: 18 },
   err: { color: "#ff8a80", fontSize: 14 },
-  pinDots: { fontSize: 28, letterSpacing: 4, color: TacticalPalette.coyote, textAlign: "center" },
+  pinInput: {
+    borderWidth: 1,
+    borderColor: TacticalPalette.border,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    fontSize: 20,
+    letterSpacing: 4,
+    color: TacticalPalette.bone,
+    backgroundColor: TacticalPalette.charcoal,
+    textAlign: "center",
+  },
   pad: { flexDirection: "row", flexWrap: "wrap", gap: 10, justifyContent: "center", marginTop: 8 },
   key: {
     borderRadius: 12,
