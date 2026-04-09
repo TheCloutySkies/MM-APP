@@ -93,6 +93,7 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
     panelPin,
     setPanelPin,
     unlocked,
+    commsPinBusy,
     unlockComms,
     createIdentity,
     hasIdentityDevice,
@@ -189,15 +190,21 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
   useEffect(() => {
     if (!verifyOpen || !activePeerId) {
       setVerifyPhrase(null);
+      setVerifyLoading(false);
       return;
     }
+    let cancelled = false;
     setVerifyLoading(true);
     setVerifyPhrase(null);
     void (async () => {
       const phrase = await buildVerifyPhraseForPeer(activePeerId);
+      if (cancelled) return;
       setVerifyPhrase(phrase);
       setVerifyLoading(false);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [verifyOpen, activePeerId, buildVerifyPhraseForPeer]);
 
   const onSend = useCallback(() => {
@@ -254,14 +261,23 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
             placeholderTextColor={TacticalPalette.boneMuted}
             secureTextEntry
             keyboardType="number-pad"
+            editable={!commsPinBusy}
             value={panelPin}
             onChangeText={setPanelPin}
             style={[styles.input, { color: chrome.text, borderColor: TacticalPalette.border }]}
           />
           <Pressable
-            style={[styles.primaryBtn, { backgroundColor: chrome.tint }]}
+            disabled={commsPinBusy}
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: chrome.tint, opacity: commsPinBusy ? 0.7 : 1 },
+            ]}
             onPress={() => void createIdentity()}>
-            <Text style={[styles.primaryTx, { color: TacticalPalette.matteBlack }]}>Continue</Text>
+            {commsPinBusy ? (
+              <ActivityIndicator color={TacticalPalette.matteBlack} />
+            ) : (
+              <Text style={[styles.primaryTx, { color: TacticalPalette.matteBlack }]}>Continue</Text>
+            )}
           </Pressable>
         </ScrollView>
       ) : !unlocked ? (
@@ -274,12 +290,23 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
             placeholderTextColor={TacticalPalette.boneMuted}
             secureTextEntry
             keyboardType="number-pad"
+            editable={!commsPinBusy}
             value={panelPin}
             onChangeText={setPanelPin}
             style={[styles.input, { color: chrome.text, borderColor: TacticalPalette.border }]}
           />
-          <Pressable style={[styles.primaryBtn, { backgroundColor: chrome.tint }]} onPress={() => void unlockComms()}>
-            <Text style={[styles.primaryTx, { color: TacticalPalette.matteBlack }]}>Unlock chat</Text>
+          <Pressable
+            disabled={commsPinBusy}
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: chrome.tint, opacity: commsPinBusy ? 0.7 : 1 },
+            ]}
+            onPress={() => void unlockComms()}>
+            {commsPinBusy ? (
+              <ActivityIndicator color={TacticalPalette.matteBlack} />
+            ) : (
+              <Text style={[styles.primaryTx, { color: TacticalPalette.matteBlack }]}>Unlock chat</Text>
+            )}
           </Pressable>
         </ScrollView>
       ) : (

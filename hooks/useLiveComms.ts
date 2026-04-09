@@ -21,8 +21,8 @@ import {
 } from "@/lib/e2ee/identity";
 import { appendOutbox, loadOutbox, replaceOutbox } from "@/lib/e2ee/localStore";
 import { flushOutboxSequential } from "@/lib/e2ee/outboxSync";
-import { setTeamGroupKeyBridge } from "@/lib/e2ee/teamGroupKeyBridge";
 import { formatSecurityPhrase, securityPhraseFromSpkiPair } from "@/lib/e2ee/securityWords";
+import { setTeamGroupKeyBridge } from "@/lib/e2ee/teamGroupKeyBridge";
 import type { E2eeBroadcastV1, E2eeChatMessage, E2eeEnvelopeRow } from "@/lib/e2ee/types";
 import { GLOBAL_GROUP_ID } from "@/lib/e2ee/types";
 import {
@@ -74,6 +74,8 @@ export function useLiveComms() {
   const [messages, setMessages] = useState<E2eeChatMessage[]>([]);
   const [panelPin, setPanelPin] = useState("");
   const [unlocked, setUnlocked] = useState(false);
+  /** True while first-time bootstrap or PIN unlock is running — prevents double-submit races on slow networks. */
+  const [commsPinBusy, setCommsPinBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [hasIdentityDevice, setHasIdentityDevice] = useState(false);
   const [invitePeerId, setInvitePeerId] = useState("");
@@ -90,6 +92,8 @@ export function useLiveComms() {
   const groupKeyRef = useRef<Uint8Array | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const channelRef = useRef<RealtimeChannel | null>(null);
+  /** Synchronous guard: React state updates lag one frame; block re-entrancy immediately. */
+  const commsPinBusyRef = useRef(false);
   /** Broadcast channel websocket healthy (SUBSCRIBED). Falls back faster than navigator.onLine alone. */
   const broadcastChannelReadyRef = useRef(false);
   const outboxFlushLockRef = useRef(false);
@@ -633,47 +637,93 @@ export function useLiveComms() {
     }
   }, [supabase, profileId, syncGroupKey, createGlobalChannel]);
 
+  /**
+   * Core unlock: unwrap identity, load team key, wire realtime. Caller passes the exact PIN string so this stays correct
+   * after `await`s (no stale `panelPin` closure) and matches the PIN used for bootstrap in the same tap.
+   */
+  const performCommsUnlock = useCallback(
+    async (pin: string): Promise<{ ok: true } | { ok: false; message: string }> => {
+      const trimmed = pin.trim();
+      if (!profileId || !trimmed) {
+        return { ok: false, message: "Enter the same PIN you use for the vault." };
+      }
+      const { privateKey, error } = await unlockIdentityPrivateKey(profileId, trimmed);
+      if (error || !privateKey) {
+        return { ok: false, message: error?.message ?? "Unlock failed" };
+      }
+      privateKeyRef.current = privateKey;
+      await refreshMySpki();
+      await syncGroupKey();
+      if (!groupKeyRef.current) {
+        await createGlobalChannel();
+      }
+      if (supabase && profileId) {
+        const admin = await isGroupAdmin(supabase, profileId);
+        setCommsAdmin(admin);
+      }
+      await loadDirectory();
+      setUnlocked(true);
+      void flushOutboxWithUi();
+      return { ok: true };
+    },
+    [profileId, refreshMySpki, syncGroupKey, createGlobalChannel, supabase, loadDirectory, flushOutboxWithUi],
+  );
+
   const unlockComms = useCallback(async () => {
-    if (!profileId || !panelPin.trim()) {
+    const pin = panelPin.trim();
+    if (!profileId || !pin) {
       setStatus("Enter the same PIN you use for the vault.");
       return;
     }
+    if (commsPinBusyRef.current) return;
+    commsPinBusyRef.current = true;
+    setCommsPinBusy(true);
     setStatus(null);
-    const { privateKey, error } = await unlockIdentityPrivateKey(profileId, panelPin.trim());
-    if (error || !privateKey) {
-      setStatus(error?.message ?? "Unlock failed");
-      return;
+    try {
+      const result = await performCommsUnlock(pin);
+      if (!result.ok) {
+        setStatus(result.message);
+        return;
+      }
+      setPanelPin("");
+    } finally {
+      commsPinBusyRef.current = false;
+      setCommsPinBusy(false);
     }
-    privateKeyRef.current = privateKey;
-    setPanelPin("");
-    await refreshMySpki();
-    await syncGroupKey();
-    if (!groupKeyRef.current) {
-      await createGlobalChannel();
-    }
-    if (supabase && profileId) {
-      const admin = await isGroupAdmin(supabase, profileId);
-      setCommsAdmin(admin);
-    }
-    await loadDirectory();
-    setUnlocked(true);
-    void flushOutboxWithUi();
-  }, [profileId, panelPin, refreshMySpki, syncGroupKey, createGlobalChannel, supabase, loadDirectory, flushOutboxWithUi]);
+  }, [profileId, panelPin, performCommsUnlock]);
 
   const createIdentity = useCallback(async () => {
     if (!supabase || !profileId || !panelPin.trim()) {
       setStatus("Enter your vault PIN to continue.");
       return;
     }
+    if (commsPinBusyRef.current) return;
+    const pin = panelPin.trim();
+    commsPinBusyRef.current = true;
+    setCommsPinBusy(true);
     setStatus(null);
-    const { error } = await bootstrapIdentityOnDevice(supabase, profileId, panelPin.trim());
-    if (error) {
-      setStatus(error.message);
-      return;
+    try {
+      const { error } = await bootstrapIdentityOnDevice(supabase, profileId, pin);
+      if (error) {
+        setStatus(error.message);
+        return;
+      }
+      setHasIdentityDevice(true);
+      const unlockResult = await performCommsUnlock(pin);
+      if (!unlockResult.ok) {
+        setStatus(
+          unlockResult.message.includes("Wrong PIN") || unlockResult.message.includes("corrupted")
+            ? "Setup finished but unlock failed. Try the Unlock chat button with the same PIN."
+            : unlockResult.message,
+        );
+        return;
+      }
+      setPanelPin("");
+    } finally {
+      commsPinBusyRef.current = false;
+      setCommsPinBusy(false);
     }
-    setHasIdentityDevice(true);
-    await unlockComms();
-  }, [supabase, profileId, panelPin, unlockComms]);
+  }, [supabase, profileId, panelPin, performCommsUnlock]);
 
   const inviteToGlobal = useCallback(async () => {
     if (!supabase || !profileId || !privateKeyRef.current || !groupKeyRef.current) return;
@@ -947,6 +997,7 @@ export function useLiveComms() {
     panelPin,
     setPanelPin,
     unlocked,
+    commsPinBusy,
     unlockComms,
     createIdentity,
     hasIdentityDevice,
