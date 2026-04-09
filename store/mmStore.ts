@@ -20,10 +20,11 @@ import {
     resolveDesktopFromLayoutPref,
     setLayoutPreferencePersistent
 } from "@/lib/layout/layoutPreference";
-import { SK, secureGet, secureSet, wipeLocalSecrets, wipeSessionTokens } from "@/lib/secure/mmSecureStore";
+import { SCREENING_REWARD_TEAM_KEY_HEX } from "@/lib/opsScreening";
+import { SK, secureDelete, secureGet, secureSet, wipeLocalSecrets, wipeSessionTokens } from "@/lib/secure/mmSecureStore";
 import { getAuthSupabase } from "@/lib/supabase/authSupabase";
 import { ensureCalendarSaltOnUnlock } from "@/lib/supabase/calendarProfile";
-import { isJwtExpired } from "@/lib/supabase/jwtExp";
+import { isJwtExpired, jwtDisplayHandle, jwtSub } from "@/lib/supabase/jwtExp";
 import { createMMSupabase } from "@/lib/supabase/mmClient";
 
 export type VaultMode = "main" | "decoy";
@@ -58,6 +59,13 @@ type MMState = {
   tabRailHeightPx: number;
   /** 0–100 — darken map basemap in Night Ops (brightness / overlay). */
   mapNightDimPercent: number;
+  /**
+   * Optional 64-char hex — overrides env for map/mission/bulletincrypto; persisted locally.
+   * Lets teammates match EXPO_PUBLIC_MM_MAP_SHARED_KEY without rebuilding.
+   */
+  teamMapSharedKeyHex: string | null;
+  /** Device-local: completed post-unlock screening (main vault); grants shared ops key from env. */
+  opsScreeningComplete: boolean;
 };
 
 function layoutWidthPx(): number {
@@ -135,6 +143,18 @@ type MMActions = {
   setTabRailHeightPx: (px: number) => void;
   persistTabRailGeometry: () => Promise<void>;
   setMapNightDimPercent: (n: number) => Promise<void>;
+  /** Persist 64-char hex team key, or clear to use env / vault only. */
+  setTeamMapSharedKeyHex: (hex: string | null) => Promise<void>;
+  /**
+   * After correct screening answer: persist team key from `EXPO_PUBLIC_MM_MAP_SHARED_KEY` (if not already set),
+   * then mark screening complete on this device.
+   */
+  completeOpsScreening: () => Promise<void>;
+  /**
+   * If we have an access token but `profileId` was lost (e.g. partial localStorage on web),
+   * recover `sub` from the JWT, persist, and recreate the Supabase client when missing.
+   */
+  reconcileProfileIdFromJwt: () => Promise<void>;
 };
 
 async function persistSession(token: string, profileId: string, username: string) {
@@ -242,13 +262,64 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   tabRailWidthPx: TAB_RAIL_DESK_W.def,
   tabRailHeightPx: TAB_RAIL_MOB_H.def,
   mapNightDimPercent: MAP_NIGHT_DIM.def,
+  teamMapSharedKeyHex: null,
+  opsScreeningComplete: false,
 
   setSupabaseClient: (c) => set({ supabase: c }),
+
+  completeOpsScreening: async () => {
+    await get().setTeamMapSharedKeyHex(SCREENING_REWARD_TEAM_KEY_HEX);
+    await secureSet(SK.opsScreeningComplete, "1");
+    set({ opsScreeningComplete: true });
+  },
+
+  setTeamMapSharedKeyHex: async (hex) => {
+    const raw = hex?.trim().toLowerCase() ?? "";
+    if (!raw) {
+      await secureDelete(SK.teamMapSharedKeyHex);
+      set({ teamMapSharedKeyHex: null });
+      return;
+    }
+    if (raw.length !== 64 || !/^[0-9a-f]+$/.test(raw)) {
+      throw new Error("Team key must be exactly 64 hexadecimal characters (32-byte AES key).");
+    }
+    await secureSet(SK.teamMapSharedKeyHex, raw);
+    set({ teamMapSharedKeyHex: raw });
+  },
 
   setMapNightDimPercent: async (n) => {
     const mapNightDimPercent = clampMapNightDim(n);
     await secureSet(SK.mapNightDimPercent, String(mapNightDimPercent));
     set({ mapNightDimPercent });
+  },
+
+  reconcileProfileIdFromJwt: async () => {
+    const token = get().accessToken;
+    const existingPid = get().profileId;
+    if (!token || existingPid) return;
+    const sub = jwtSub(token);
+    if (!sub) return;
+    let username = get().username ?? (await secureGet(SK.username)) ?? jwtDisplayHandle(token) ?? sub;
+    try {
+      await persistSession(token, sub, username);
+    } catch {
+      /* still fix in-memory session */
+    }
+    let supabase = get().supabase;
+    if (!supabase) {
+      try {
+        supabase = await createMMSupabase(token);
+      } catch {
+        supabase = null;
+      }
+    }
+    const prevSource = get().sessionSource;
+    set({
+      profileId: sub,
+      username,
+      ...(supabase ? { supabase } : {}),
+      ...(prevSource == null && supabase ? { sessionSource: "legacy" as SessionSource } : {}),
+    });
   },
 
   setTabRailWidthPx: (px) => set({ tabRailWidthPx: clampDeskRailW(px) }),
@@ -292,6 +363,15 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     const tabRailHeightPx = clampMobRailH(Number.parseInt(rh ?? "", 10));
     const dimRaw = await secureGet(SK.mapNightDimPercent);
     const mapNightDimPercent = clampMapNightDim(Number.parseInt(dimRaw ?? "", 10));
+
+    const teamHexRaw = await secureGet(SK.teamMapSharedKeyHex);
+    let teamMapSharedKeyHex: string | null = null;
+    if (teamHexRaw) {
+      const t = teamHexRaw.trim().toLowerCase();
+      if (t.length === 64 && /^[0-9a-f]+$/.test(t)) teamMapSharedKeyHex = t;
+    }
+
+    const opsScreeningComplete = (await secureGet(SK.opsScreeningComplete)) === "1";
 
     let token: string | null = null;
     let profileId: string | null = null;
@@ -346,6 +426,27 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       }
     }
 
+    if (token && !profileId) {
+      const sub = jwtSub(token);
+      if (sub) {
+        profileId = sub;
+        username = username ?? (await secureGet(SK.username)) ?? jwtDisplayHandle(token) ?? sub;
+        try {
+          await persistSession(token, profileId, username);
+        } catch {
+          /* quota / private mode */
+        }
+        if (!supabase) {
+          try {
+            supabase = await createMMSupabase(token);
+            sessionSource = sessionSource ?? "legacy";
+          } catch {
+            /* env / network */
+          }
+        }
+      }
+    }
+
     set({
       hydrated: true,
       accessToken: token,
@@ -362,6 +463,8 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       tabRailWidthPx,
       tabRailHeightPx,
       mapNightDimPercent,
+      teamMapSharedKeyHex,
+      opsScreeningComplete,
     });
   },
 
@@ -497,6 +600,8 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       mainVaultKey: null,
       decoyVaultKey: null,
       supabase: null,
+      teamMapSharedKeyHex: null,
+      opsScreeningComplete: false,
     });
   },
 
@@ -577,15 +682,47 @@ function cryptoRandomSalt(): string {
   return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Marker encryption: shared group hex key, else vault key for current partition. */
+/** Marker encryption: Settings team hex → env shared hex → vault partition. */
 export function resolveMapEncryptKey(
   mainVaultKey: Uint8Array | null,
   decoyVaultKey: Uint8Array | null,
   mode: VaultMode | null,
 ): Uint8Array {
+  const stored = useMMStore.getState().teamMapSharedKeyHex?.trim().toLowerCase() ?? "";
+  if (stored.length === 64 && /^[0-9a-f]+$/.test(stored)) {
+    return hexToBytes(stored);
+  }
   const hex = getMapSharedKeyHex();
   if (hex) return hexToBytes(hex);
   if (mode === "main" && mainVaultKey?.length === 32) return mainVaultKey;
   if (mode === "decoy" && decoyVaultKey?.length === 32) return decoyVaultKey;
   throw new Error("Map key unavailable");
+}
+
+/**
+ * All distinct keys to try when opening someone else's ops row (shared + main + decoy vault).
+ * Order: primary resolver, then the other vault key, then redundant env/stored hex if differ.
+ */
+export function collectOpsDecryptCandidates(
+  mainVaultKey: Uint8Array | null,
+  decoyVaultKey: Uint8Array | null,
+  mode: VaultMode | null,
+): Uint8Array[] {
+  const keys: Uint8Array[] = [];
+  const add = (k: Uint8Array | null | undefined) => {
+    if (!k || k.length !== 32) return;
+    if (!keys.some((x) => x.length === k.length && x.every((b, i) => b === k[i]))) keys.push(k);
+  };
+  try {
+    add(resolveMapEncryptKey(mainVaultKey, decoyVaultKey, mode));
+  } catch {
+    /* may have no shared key and vault locked */
+  }
+  add(mainVaultKey ?? undefined);
+  add(decoyVaultKey ?? undefined);
+  const st = useMMStore.getState().teamMapSharedKeyHex?.trim().toLowerCase() ?? "";
+  if (st.length === 64 && /^[0-9a-f]+$/.test(st)) add(hexToBytes(st));
+  const envHex = getMapSharedKeyHex();
+  if (envHex) add(hexToBytes(envHex));
+  return keys;
 }

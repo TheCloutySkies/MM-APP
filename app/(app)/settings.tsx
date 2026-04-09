@@ -2,7 +2,7 @@ import Slider from "@react-native-community/slider";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
     Alert,
     Platform,
@@ -41,6 +41,13 @@ export default function SettingsScreen() {
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
   const [exportPhrase, setExportPhrase] = useState("");
+  const teamMapSharedKeyHex = useMMStore((s) => s.teamMapSharedKeyHex);
+  const setTeamMapSharedKeyHex = useMMStore((s) => s.setTeamMapSharedKeyHex);
+  const [teamKeyInput, setTeamKeyInput] = useState(teamMapSharedKeyHex ?? "");
+
+  useEffect(() => {
+    setTeamKeyInput(teamMapSharedKeyHex ?? "");
+  }, [teamMapSharedKeyHex]);
 
   const signalSos = async () => {
     /** `expo-location` is lazy-split on web; calling it triggers Metro `asyncRequire` → “Failed to fetch” in dev. */
@@ -172,6 +179,66 @@ export default function SettingsScreen() {
             <Text style={[styles.dimValue, { color: chrome.text }]}>{mapNightDimPercent}%</Text>
           </View>
         ) : null}
+      </SettingsSection>
+
+      <SettingsSection
+        title="Team operations key"
+        subtitle="Same 64-character hex as EXPO_PUBLIC_MM_MAP_SHARED_KEY. When set here, map markers, mission hubs, target packages, and bulletins decrypt for everyone who pastes the identical key — no rebuild needed. Leave empty to use only the key embedded in this build (if any) or your vault partition.">
+        <TextInput
+          value={teamKeyInput}
+          onChangeText={(t) => setTeamKeyInput(t.replace(/[^0-9a-fA-F]/g, ""))}
+          placeholder="64 hex chars (optional)"
+          placeholderTextColor={chrome.tabIconDefault}
+          autoCapitalize="none"
+          autoCorrect={false}
+          maxLength={64}
+          style={[
+            styles.teamKeyInput,
+            {
+              color: chrome.text,
+              borderColor: chrome.tabIconDefault,
+              backgroundColor: chrome.panel,
+            },
+          ]}
+        />
+        <Text style={[styles.teamKeyMeta, { color: chrome.tabIconDefault }]}>
+          {teamKeyInput.length}/64 · stored only on this device
+        </Text>
+        <View style={styles.teamKeyActions}>
+          <Pressable
+            onPress={async () => {
+              try {
+                await setTeamMapSharedKeyHex(teamKeyInput.trim() || null);
+                Alert.alert("Team key", teamKeyInput.trim() ? "Saved." : "Cleared — using env or vault only.");
+              } catch (e) {
+                Alert.alert("Team key", e instanceof Error ? e.message : "Invalid key");
+              }
+            }}
+            style={({ pressed }) => [
+              styles.teamKeySave,
+              { backgroundColor: chrome.tint, opacity: pressed ? 0.9 : 1 },
+            ]}>
+            <Text style={styles.primaryBtnText}>Save team key</Text>
+          </Pressable>
+          {teamMapSharedKeyHex ? (
+            <Pressable
+              onPress={async () => {
+                try {
+                  await setTeamMapSharedKeyHex(null);
+                  setTeamKeyInput("");
+                  Alert.alert("Team key", "Cleared.");
+                } catch (e) {
+                  Alert.alert("Team key", e instanceof Error ? e.message : "Failed");
+                }
+              }}
+              style={({ pressed }) => [
+                styles.teamKeyClear,
+                { borderColor: chrome.tabIconDefault, opacity: pressed ? 0.85 : 1 },
+              ]}>
+              <Text style={{ color: chrome.text, fontWeight: "700" }}>Clear</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </SettingsSection>
 
       <SettingsSection
@@ -424,4 +491,16 @@ const styles = StyleSheet.create({
   },
   destructiveBtnText: { color: "#fca5a5", fontSize: 16, fontWeight: "600" },
   destructiveHint: { color: "rgba(252,165,165,0.75)", fontSize: 13, marginTop: 4, lineHeight: 18 },
+  teamKeyInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 13,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+  },
+  teamKeyMeta: { fontSize: 12, marginTop: 8, lineHeight: 17 },
+  teamKeyActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, marginTop: 14 },
+  teamKeySave: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12 },
+  teamKeyClear: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1 },
 });

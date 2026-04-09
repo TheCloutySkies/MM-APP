@@ -1,6 +1,8 @@
 import type { ComponentType } from "react";
 import { Platform } from "react-native";
 
+import type { Feature, FeatureCollection } from "geojson";
+
 import type {
     MapBaseLayerId,
     MapFlyToRequest,
@@ -10,6 +12,7 @@ import type {
     MapPolylineOverlay,
     MapUserLocation,
 } from "./mapTypes";
+import type { GisDrawPalette, MeasurePreview } from "./gisMapTypes";
 
 export type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay };
 
@@ -27,6 +30,17 @@ type Props = {
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
   /** 0–100: extra darken (Night Ops basemap); 0 disables. */
   mapDimPercent?: number;
+  /** Pin tapped (Calcite-style intel panel); when set, Leaflet skips popup for pins. */
+  onPinSelect?: (pin: MapPin) => void;
+  /** Web GIS engine — Leaflet only. */
+  gisFeatureCollection?: FeatureCollection | null;
+  onGisFeatureSelect?: (feature: Feature) => void;
+  geomanEnabled?: boolean;
+  onPmCreate?: (feature: Feature) => void;
+  onMouseMoveLatLng?: (lat: number, lng: number) => void;
+  gisMapZoom?: number;
+  measurePreview?: MeasurePreview | null;
+  gisPalette?: Partial<GisDrawPalette>;
 };
 
 /**

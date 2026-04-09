@@ -75,4 +75,21 @@ body {
 .mm-leaflet-host, [data-mm-leaflet-root] {
   touch-action: none;
 }
+/* Calcite-style semantic tokens (woodland default). Night Ops overrides via JS from useDesignTokensWeb. */
+:root {
+  --mm-color-background: #0d0f0c;
+  --mm-color-surface: #1a1e18;
+  --mm-color-surface-elevated: #242a22;
+  --mm-color-panel: #2c332b;
+  --mm-color-foreground: #e8e4d9;
+  --mm-color-foreground-muted: #b8b4a8;
+  --mm-color-brand: #6b8e5c;
+  --mm-color-danger: #c45c4a;
+  --mm-color-success: #6b9e6b;
+  --mm-color-border: #3a4238;
+  --mm-color-border-light: #4f584c;
+  --mm-color-tint: #6b8e5c;
+  --mm-color-tab-icon: #6b5a45;
+  --mm-color-tab-icon-selected: #e8e4d9;
+}
 `;

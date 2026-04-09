@@ -48,6 +48,7 @@ type Props = {
   pointerMode?: MapPointerMode;
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
   mapDimPercent?: number;
+  onPinSelect?: (pin: MapPin) => void;
 };
 
 function zoomToDeltas(lat: number, zoom: number) {
@@ -71,6 +72,7 @@ export function TacticalMap({
   pointerMode: _pointerMode = "default",
   onCenterChange,
   mapDimPercent = 0,
+  onPinSelect,
 }: Props) {
   const mapRef = useRef<MapView>(null);
   const baseMapType =
@@ -194,6 +196,7 @@ export function TacticalMap({
             title={p.title}
             description={p.subtitle}
             pinColor={p.tint}
+            onPress={() => onPinSelect?.(p)}
           />
         ))}
       </MapView>

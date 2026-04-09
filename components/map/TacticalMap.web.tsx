@@ -2,6 +2,8 @@ import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
+import type { Feature, FeatureCollection } from "geojson";
+
 import type {
     MapBaseLayerId,
     MapFlyToRequest,
@@ -11,6 +13,7 @@ import type {
     MapPolylineOverlay,
     MapUserLocation,
 } from "./mapTypes";
+import type { GisDrawPalette, MeasurePreview } from "./gisMapTypes";
 
 export type { MapFlyToRequest, MapPin, MapPolygonOverlay, MapPolylineOverlay };
 
@@ -26,6 +29,15 @@ type Props = {
   pointerMode?: MapPointerMode;
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
   mapDimPercent?: number;
+  onPinSelect?: (pin: MapPin) => void;
+  gisFeatureCollection?: FeatureCollection | null;
+  onGisFeatureSelect?: (feature: Feature) => void;
+  geomanEnabled?: boolean;
+  onPmCreate?: (feature: Feature) => void;
+  onMouseMoveLatLng?: (lat: number, lng: number) => void;
+  gisMapZoom?: number;
+  measurePreview?: MeasurePreview | null;
+  gisPalette?: Partial<GisDrawPalette>;
 };
 
 /**

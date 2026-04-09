@@ -30,3 +30,35 @@ export function isJwtExpired(token: string, leewaySec = LEEWAY_SEC): boolean {
   if (exp == null) return false;
   return Math.floor(Date.now() / 1000) >= exp - leewaySec;
 }
+
+/** `sub` claim — for MM this is `mm_profiles.id` (legacy) or `auth.users.id` (email auth). */
+export function jwtSub(token: string): string | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const json = base64UrlPayloadToUtf8(parts[1]!);
+    const payload = JSON.parse(json) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub.length > 0 ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Display handle from JWT (mm-login `user_metadata.username`, or email). */
+export function jwtDisplayHandle(token: string): string | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const json = base64UrlPayloadToUtf8(parts[1]!);
+    const payload = JSON.parse(json) as { user_metadata?: Record<string, unknown> };
+    const um = payload.user_metadata;
+    if (!um) return null;
+    const u = um.username;
+    if (typeof u === "string" && u.length > 0) return u;
+    const e = um.email;
+    if (typeof e === "string" && e.length > 0) return e;
+    return null;
+  } catch {
+    return null;
+  }
+}

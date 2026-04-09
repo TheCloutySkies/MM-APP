@@ -1,7 +1,15 @@
+import type { Feature, FeatureCollection } from "geojson";
 import L from "leaflet";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 
+import { ensureFeatureId } from "@/lib/gis/gisTypes";
+import {
+    generateTacticalSymbolSvg,
+    milSymbolIconSize,
+} from "@/lib/gis/milSym";
+
+import type { GisDrawPalette, MeasurePreview } from "./gisMapTypes";
 import type {
     MapBaseLayerId,
     MapFlyToRequest,
@@ -11,6 +19,17 @@ import type {
     MapPolylineOverlay,
     MapUserLocation,
 } from "./mapTypes";
+
+export type { GisDrawPalette, MeasurePreview };
+
+const DEFAULT_GIS_PALETTE: GisDrawPalette = {
+  bufferStroke: "#ef4444",
+  bufferFill: "#ef4444",
+  lineString: "#60a5fa",
+  polygonStroke: "#6b8e5c",
+  polygonFill: "#6b8e5c",
+  measure: "#fbbf24",
+};
 
 type Props = {
   pins: MapPin[];
@@ -25,6 +44,19 @@ type Props = {
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
   /** 0–100 Night Ops map darken — scales Leaflet container brightness. */
   mapDimPercent?: number;
+  onPinSelect?: (pin: MapPin) => void;
+  /** Tactical GIS: client-side FeatureCollection (buffers, Geoman draws, MIL points). */
+  gisFeatureCollection?: FeatureCollection | null;
+  onGisFeatureSelect?: (feature: Feature) => void;
+  geomanEnabled?: boolean;
+  onPmCreate?: (feature: Feature) => void;
+  onMouseMoveLatLng?: (lat: number, lng: number) => void;
+  /** Map zoom — scales milsymbol DivIcons on change. */
+  gisMapZoom?: number;
+  /** Ephemeral measure line + endpoints while Measure tool is active. */
+  measurePreview?: MeasurePreview | null;
+  /** Default colors for GIS vectors (per-feature props may override). */
+  gisPalette?: Partial<GisDrawPalette>;
 };
 
 /** CDN assets so Metro never resolves leaflet/dist/images/*.png */
@@ -128,6 +160,59 @@ function makeHybridLabelsLayer() {
   );
 }
 
+/** Geoman CSS via CDN — avoids Metro `import(".css")` and async chunks that break Expo web. */
+function ensureGeomanCssLink() {
+  if (typeof document === "undefined") return;
+  const id = "mm-geoman-css";
+  if (document.getElementById(id)) return;
+  const link = document.createElement("link");
+  link.id = id;
+  link.rel = "stylesheet";
+  link.href = "https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.css";
+  document.head.appendChild(link);
+}
+
+let leafletGeomanModuleLoaded = false;
+
+/**
+ * Geoman expects `globalThis.L` (script-tag style). Some bundlers also split Leaflet; align them.
+ * The module patches Leaflet init hooks — maps created before this load never get `map.pm`, so we
+ * attach with `new L.PM.Map(map)` in the Geoman effect when needed.
+ */
+function loadLeafletGeomanOnce() {
+  if (leafletGeomanModuleLoaded) return;
+  const g = globalThis as typeof globalThis & { L?: typeof L };
+  g.L = L;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("@geoman-io/leaflet-geoman-free");
+    leafletGeomanModuleLoaded = true;
+  } catch {
+    leafletGeomanModuleLoaded = false;
+    throw new Error("[Geoman] failed to load @geoman-io/leaflet-geoman-free");
+  }
+}
+
+type GeomanPmControls = {
+  addControls: (o: Record<string, unknown>) => void;
+  removeControls: () => void;
+};
+
+/** Ensures `map.pm` exists for maps that were created before Geoman was first loaded. */
+function ensureMapPmControls(map: L.Map): GeomanPmControls | undefined {
+  loadLeafletGeomanOnce();
+  const PM = L as unknown as { PM?: { Map: new (mp: L.Map) => GeomanPmControls } };
+  if (!PM.PM?.Map) {
+    console.warn("[Geoman] L.PM.Map missing after load");
+    return undefined;
+  }
+  const m = map as L.Map & { pm?: GeomanPmControls };
+  if (!m.pm) {
+    m.pm = new PM.PM.Map(map);
+  }
+  return m.pm;
+}
+
 function TacticalMapLeaflet({
   pins,
   polylines = [],
@@ -140,14 +225,37 @@ function TacticalMapLeaflet({
   pointerMode = "default",
   onCenterChange,
   mapDimPercent = 0,
+  onPinSelect,
+  gisFeatureCollection = null,
+  onGisFeatureSelect,
+  geomanEnabled = false,
+  onPmCreate,
+  onMouseMoveLatLng,
+  gisMapZoom = 10,
+  measurePreview = null,
+  gisPalette: gisPalettePartial,
 }: Props) {
   useLeafletAssets();
+
+  const gisPalette = useMemo(
+    () => ({ ...DEFAULT_GIS_PALETTE, ...gisPalettePartial }),
+    [
+      gisPalettePartial?.bufferStroke,
+      gisPalettePartial?.bufferFill,
+      gisPalettePartial?.lineString,
+      gisPalettePartial?.polygonStroke,
+      gisPalettePartial?.polygonFill,
+      gisPalettePartial?.measure,
+    ],
+  );
 
   const containerRef = useRef<View>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tileRef = useRef<L.TileLayer | null>(null);
   const hybridLabelsRef = useRef<L.TileLayer | null>(null);
   const layerRef = useRef<L.LayerGroup | null>(null);
+  const geoJsonGroupRef = useRef<L.LayerGroup | null>(null);
+  const measurePreviewGroupRef = useRef<L.LayerGroup | null>(null);
   const pinsRef = useRef(pins);
   pinsRef.current = pins;
   const polylinesRef = useRef(polylines);
@@ -164,6 +272,20 @@ function TacticalMapLeaflet({
   onCenterRef.current = onCenterChange;
   const mapDimRef = useRef(mapDimPercent);
   mapDimRef.current = mapDimPercent;
+  const onPinSelectRef = useRef(onPinSelect);
+  onPinSelectRef.current = onPinSelect;
+  const gisFcRef = useRef(gisFeatureCollection);
+  gisFcRef.current = gisFeatureCollection;
+  const onGisSelectRef = useRef(onGisFeatureSelect);
+  onGisSelectRef.current = onGisFeatureSelect;
+  const onPmCreateRef = useRef(onPmCreate);
+  onPmCreateRef.current = onPmCreate;
+  const onMouseMoveRef = useRef(onMouseMoveLatLng);
+  onMouseMoveRef.current = onMouseMoveLatLng;
+  const gisZoomRef = useRef(gisMapZoom);
+  gisZoomRef.current = gisMapZoom;
+  const gisPaletteRef = useRef(gisPalette);
+  gisPaletteRef.current = gisPalette;
 
   const applyMapDim = (map: L.Map, dimRaw: number) => {
     const el = map.getContainer();
@@ -208,9 +330,17 @@ function TacticalMapLeaflet({
     }
 
     for (const p of pinsRef.current) {
-      L.marker([p.lat, p.lng], { icon: markerIcon(p.tint), title: p.title })
-        .bindPopup(popupHtml(p.title, p.subtitle))
-        .addTo(group);
+      const mk = L.marker([p.lat, p.lng], { icon: markerIcon(p.tint), title: p.title });
+      const handler = onPinSelectRef.current;
+      if (handler) {
+        mk.on("click", (ev) => {
+          L.DomEvent.stopPropagation(ev);
+          handler(p);
+        });
+      } else {
+        mk.bindPopup(popupHtml(p.title, p.subtitle));
+      }
+      mk.addTo(group);
     }
 
     const ul = userLocRef.current;
@@ -251,6 +381,8 @@ function TacticalMapLeaflet({
     }
 
     layerRef.current = L.layerGroup().addTo(map);
+    geoJsonGroupRef.current = L.layerGroup().addTo(map);
+    measurePreviewGroupRef.current = L.layerGroup().addTo(map);
     paintAll();
     applyMapDim(map, mapDimRef.current);
 
@@ -285,6 +417,8 @@ function TacticalMapLeaflet({
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
+      geoJsonGroupRef.current = null;
+      measurePreviewGroupRef.current = null;
       tileRef.current = null;
       hybridLabelsRef.current = null;
     };
@@ -349,7 +483,7 @@ function TacticalMapLeaflet({
 
   useEffect(() => {
     paintAll();
-  }, [pins, polylines, polygons, userLocation]);
+  }, [pins, polylines, polygons, userLocation, onPinSelect]);
 
   useEffect(() => {
     if (flyTo == null) return;
@@ -357,6 +491,167 @@ function TacticalMapLeaflet({
     if (!map) return;
     map.flyTo([flyTo.lat, flyTo.lng], flyTo.zoom ?? 10, { duration: 1.2 });
   }, [flyTo?.seq]);
+
+  useEffect(() => {
+    const g = geoJsonGroupRef.current;
+    if (!g) return;
+    g.clearLayers();
+    const fc = gisFeatureCollection;
+    if (!fc?.features?.length) return;
+    const z = gisMapZoom ?? 10;
+    const palette = gisPaletteRef.current;
+    const symSize = Math.max(26, Math.min(58, Math.round(22 + z * 1.2)));
+    L.geoJSON(fc, {
+      style: (feat) => {
+        const props = feat?.properties as Record<string, unknown> | null;
+        const kind = props?.kind;
+        if (kind === "buffer") {
+          const stroke =
+            typeof props?.bufferStroke === "string" ? props.bufferStroke : palette.bufferStroke;
+          const fill = typeof props?.bufferFill === "string" ? props.bufferFill : palette.bufferFill;
+          const fo =
+            typeof props?.bufferFillOpacity === "number" && Number.isFinite(props.bufferFillOpacity)
+              ? props.bufferFillOpacity
+              : 0.14;
+          return {
+            color: stroke,
+            weight: 2,
+            fillColor: fill,
+            fillOpacity: fo,
+            interactive: false,
+          } as L.PathOptions;
+        }
+        if (feat?.geometry?.type === "LineString") {
+          const c = typeof props?.lineColor === "string" ? props.lineColor : palette.lineString;
+          return { color: c, weight: 4, opacity: 0.92 } as L.PathOptions;
+        }
+        const s = typeof props?.zoneStroke === "string" ? props.zoneStroke : palette.polygonStroke;
+        const f = typeof props?.zoneFill === "string" ? props.zoneFill : palette.polygonFill;
+        return {
+          color: s,
+          weight: 2,
+          fillColor: f,
+          fillOpacity: 0.16,
+        } as L.PathOptions;
+      },
+      pointToLayer: (feat, latlng) => {
+        const sidc = (feat.properties as Record<string, unknown> | undefined)?.sidc;
+        if (typeof sidc === "string" && sidc.length > 0) {
+          const svg = generateTacticalSymbolSvg({ sidc, size: symSize, infoFields: false });
+          const { w, h, ax, ay } = milSymbolIconSize(sidc, symSize);
+          const icon = L.divIcon({
+            html: `<div style="width:${w}px;height:${h}px;display:flex;align-items:center;justify-content:center">${svg}</div>`,
+            iconSize: [w, h],
+            iconAnchor: [ax, ay],
+            className: "mm-mil-marker",
+          });
+          return L.marker(latlng, { icon, interactive: true });
+        }
+        return L.circleMarker(latlng, {
+          radius: 7,
+          color: "#6b8e5c",
+          fillColor: "#93c47d",
+          fillOpacity: 0.85,
+          weight: 2,
+        });
+      },
+      onEachFeature: (feat, layer) => {
+        const kind = (feat.properties as Record<string, unknown> | null)?.kind;
+        if (kind === "buffer") return;
+        layer.on("click", (ev: L.LeafletMouseEvent) => {
+          L.DomEvent.stopPropagation(ev);
+          onGisSelectRef.current?.(feat as Feature);
+        });
+      },
+    }).addTo(g);
+  }, [gisFeatureCollection, gisMapZoom, gisPalette]);
+
+  useEffect(() => {
+    const g = measurePreviewGroupRef.current;
+    if (!g) return;
+    g.clearLayers();
+    const p = measurePreview;
+    const palette = gisPaletteRef.current;
+    if (!p?.from) return;
+    const col = p.color ?? palette.measure;
+    const a: L.LatLngTuple = [p.from.lat, p.from.lng];
+    L.circleMarker(a, { radius: 5, color: col, weight: 2, fillColor: col, fillOpacity: 0.9 }).addTo(g);
+    const to = p.to;
+    if (to && (to.lat !== p.from.lat || to.lng !== p.from.lng)) {
+      const b: L.LatLngTuple = [to.lat, to.lng];
+      L.polyline(
+        [a, b],
+        { color: col, weight: 3, opacity: 0.95, dashArray: "8 6" },
+      ).addTo(g);
+      L.circleMarker(b, { radius: 5, color: col, weight: 2, fillColor: "#fff", fillOpacity: 0.95 }).addTo(
+        g,
+      );
+    }
+  }, [measurePreview]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const fn = (e: L.LeafletMouseEvent) => onMouseMoveRef.current?.(e.latlng.lat, e.latlng.lng);
+    map.on("mousemove", fn);
+    return () => {
+      map.off("mousemove", fn);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!geomanEnabled) return;
+    const map = mapRef.current;
+    if (!map) return;
+    let alive = true;
+    const pmCreateHandler: L.LeafletEventHandlerFn = (e) => {
+      const ev = e as unknown as { layer: L.Layer };
+      const layer = ev.layer as L.Layer & { toGeoJSON: () => Feature };
+      const gj = ensureFeatureId(layer.toGeoJSON());
+      map.removeLayer(layer);
+      onPmCreateRef.current?.(gj);
+    };
+
+    try {
+      ensureGeomanCssLink();
+    } catch (e) {
+      console.warn("[Geoman] CSS link failed", e);
+      return;
+    }
+    let pm: GeomanPmControls | undefined;
+    try {
+      pm = ensureMapPmControls(map);
+    } catch (e) {
+      console.warn("[Geoman] failed to load", e);
+      return;
+    }
+    if (!pm || typeof pm.addControls !== "function") {
+      console.warn("[Geoman] map.pm is unavailable (Leaflet / Geoman binding)");
+      return;
+    }
+    if (!alive || !mapRef.current) return;
+    pm.addControls({
+      position: "topright",
+      drawMarker: false,
+      drawPolyline: true,
+      drawPolygon: true,
+      drawRectangle: false,
+      drawCircle: false,
+      drawCircleMarker: false,
+      drawText: false,
+      editMode: true,
+      dragMode: true,
+      removalMode: true,
+      cutPolygon: false,
+    });
+    map.on("pm:create", pmCreateHandler);
+
+    return () => {
+      alive = false;
+      map.off("pm:create", pmCreateHandler);
+      (map as L.Map & { pm?: { removeControls: () => void } }).pm?.removeControls();
+    };
+  }, [geomanEnabled]);
 
   return <View ref={containerRef} style={styles.fill} collapsable={false} />;
 }

@@ -10,6 +10,7 @@ import { LayoutProvider } from "@/components/layout/LayoutProvider";
 import { LayoutWelcomeGate } from "@/components/layout/LayoutWelcomeGate";
 import { PwaShellReadyBanner } from "@/components/offline/PwaShellReadyBanner";
 import { useColorScheme } from "@/components/useColorScheme";
+import { useDesignTokensWeb } from "@/hooks/useDesignTokensWeb";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { registerMmServiceWorker } from "@/lib/offline/registerServiceWorker";
 import { flushPendingSyncStub } from "@/lib/offline/syncQueue";
@@ -52,6 +53,7 @@ export default function RootLayout() {
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
   const chrome = useTacticalChrome();
+  useDesignTokensWeb();
   const applyLayoutBreakpoint = useMMStore((s) => s.applyLayoutBreakpoint);
 
   useEffect(() => {

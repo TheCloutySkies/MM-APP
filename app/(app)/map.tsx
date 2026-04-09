@@ -1,10 +1,13 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
+import Slider from "@react-native-community/slider";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
+import type { Feature, LineString } from "geojson";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
     ActivityIndicator,
     Alert,
+    Modal,
     PanResponder,
     Platform,
     Pressable,
@@ -18,6 +21,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MapGisFeaturePanel } from "@/components/map/MapGisFeaturePanel";
+import { MapIntelPanel } from "@/components/map/MapIntelPanel";
 import { TacticalCategoryModal } from "@/components/map/TacticalCategoryModal";
 import {
     TacticalMap,
@@ -26,11 +31,33 @@ import {
     type MapPolygonOverlay,
     type MapPolylineOverlay,
 } from "@/components/map/TacticalMap";
+import type { GisDrawPalette, MeasurePreview } from "@/components/map/gisMapTypes";
 import type { MapBaseLayerId, MapPointerMode, MapUserLocation } from "@/components/map/mapTypes";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { geocodeSearch } from "@/lib/geocode";
+import { encryptFeatureCollectionJson } from "@/lib/gis/geoJsonCrypto";
+import { saveEncryptedGisDraft } from "@/lib/gis/gisLocalStore";
+import { appendFeature, ensureFeatureId, type ActiveMapTool } from "@/lib/gis/gisTypes";
+import {
+    BUFFER_RANGE,
+    bufferAmountToKm,
+    convertAmountBetweenUnits,
+    formatDistanceFromKm,
+    type GisDistanceUnit,
+} from "@/lib/gis/gisUnits";
+import {
+    tacticalChoicesToSIDC,
+    type TacticalAffiliation,
+    type TacticalUnitType,
+} from "@/lib/gis/milSym";
+import {
+    bufferPointKm,
+    distanceKm,
+    emptyFeatureCollection,
+    lineLengthMiles,
+} from "@/lib/gis/turfOps";
 import {
     buildTacticalPayload,
     normalizeTacticalPayload,
@@ -55,6 +82,21 @@ import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStor
 
 const MIN_SHEET_H = 56;
 const SHEET_X_CLAMP = 110;
+/** Web desktop dock: remember fullscreen (collapsed) tools sidebar. */
+const MAP_TOOLS_DOCK_COLLAPSED_KEY = "mm_map_tools_dock_collapsed_v1";
+
+const GIS_COLOR_SWATCHES = [
+  "#ef4444",
+  "#f97316",
+  "#eab308",
+  "#22c55e",
+  "#14b8a6",
+  "#3b82f6",
+  "#a855f7",
+  "#ec4899",
+  "#e4e4e7",
+  "#27272a",
+] as const;
 /** Web + Settings → desktop layout: dock map tools as a right sidebar instead of a bottom sheet. */
 const DESKTOP_MAP_TOOLS_DOCK_MIN_W = 920;
 
@@ -240,6 +282,37 @@ export default function MapScreen() {
   const [layersOpen, setLayersOpen] = useState(false);
   const [hudQuery, setHudQuery] = useState("");
   const [hudSearching, setHudSearching] = useState(false);
+  /** Calcite-style intel tray — marker details in trailing / bottom panel instead of only a popup. */
+  const [selectedPin, setSelectedPin] = useState<MapPin | null>(null);
+  /** Web Leaflet: Turf + Geoman + MIL symbols — encrypted before any server write. */
+  const [gisFc, setGisFc] = useState(() => emptyFeatureCollection());
+  const [activeMapTool, setActiveMapTool] = useState<ActiveMapTool>("navigate");
+  const [selectedGisFeature, setSelectedGisFeature] = useState<Feature | null>(null);
+  const [cursorMgrs, setCursorMgrs] = useState("—");
+  const [bufferModal, setBufferModal] = useState<{ lat: number; lng: number } | null>(null);
+  const [bufferRadiusAmount, setBufferRadiusAmount] = useState(1);
+  const [bufferUnit, setBufferUnit] = useState<GisDistanceUnit>("km");
+  const [gisMeasureReadoutMode, setGisMeasureReadoutMode] = useState<"metric" | "imperial">("metric");
+  const [measureA, setMeasureA] = useState<{ lat: number; lng: number } | null>(null);
+  const [measureHover, setMeasureHover] = useState<{ lat: number; lng: number } | null>(null);
+  const [gisBufferStroke, setGisBufferStroke] = useState("#ef4444");
+  const [gisBufferFill, setGisBufferFill] = useState("#ef4444");
+  const [gisGeomanLineColor, setGisGeomanLineColor] = useState("#60a5fa");
+  const [gisGeomanZoneStroke, setGisGeomanZoneStroke] = useState("#6b8e5c");
+  const [gisGeomanZoneFill, setGisGeomanZoneFill] = useState("#6b8e5c");
+  const [gisMeasureColor, setGisMeasureColor] = useState("#fbbf24");
+  const [milAffiliation, setMilAffiliation] = useState<TacticalAffiliation>("friendly");
+  const [milUnit, setMilUnit] = useState<TacticalUnitType>("infantry");
+  const [routeEtaMph, setRouteEtaMph] = useState("30");
+  /** Desktop web: hide right Map tools column for a wider map (persisted locally). */
+  const [mapToolsDockCollapsed, setMapToolsDockCollapsed] = useState(() => {
+    if (Platform.OS !== "web" || typeof localStorage === "undefined") return false;
+    try {
+      return localStorage.getItem(MAP_TOOLS_DOCK_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const flySeq = useRef(0);
   const [flyTo, setFlyTo] = useState<MapFlyToRequest | null>(null);
@@ -248,10 +321,21 @@ export default function MapScreen() {
   const dockToolsRight = Platform.OS === "web" && desktopMode && windowW >= DESKTOP_MAP_TOOLS_DOCK_MIN_W;
   const compactToolChips = !dockToolsRight && windowW < 600;
 
-  /** Taller cap on web mobile PWA so the bottom sheet behaves like a locked panel. */
+  const persistMapToolsDockCollapsed = useCallback((collapsed: boolean) => {
+    setMapToolsDockCollapsed(collapsed);
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+      try {
+        localStorage.setItem(MAP_TOOLS_DOCK_COLLAPSED_KEY, collapsed ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  /** Anchored tools panel: max ~50% viewport on phone / PWA (Calcite-style); desktop dock uses ~58%. */
   const maxSheetH = Math.min(
     520,
-    windowH * (dockToolsRight ? 0.58 : Platform.OS === "web" ? 0.88 : 0.58),
+    windowH * (dockToolsRight ? 0.58 : 0.5),
   );
   const expandedHeightRef = useRef(Math.min(336, maxSheetH * 0.88));
   const [sheetH, setSheetH] = useState(MIN_SHEET_H);
@@ -268,6 +352,19 @@ export default function MapScreen() {
   useEffect(() => {
     expandedHeightRef.current = Math.min(expandedHeightRef.current, maxSheetH);
   }, [maxSheetH]);
+
+  useEffect(() => {
+    if (activeMapTool !== "measure") {
+      setMeasureA(null);
+      setMeasureHover(null);
+    }
+  }, [activeMapTool]);
+
+  useEffect(() => {
+    if (!bufferModal) return;
+    const { min, max } = BUFFER_RANGE[bufferUnit];
+    setBufferRadiusAmount((a) => Math.max(min, Math.min(max, a)));
+  }, [bufferModal, bufferUnit]);
 
   useEffect(() => {
     let nativeSub: { remove: () => void } | null = null;
@@ -506,10 +603,23 @@ export default function MapScreen() {
     setPathDraft([]);
     setDrawTool(mode);
     setPointDropMode(false);
+    if (mode === "route" || mode === "zone") {
+      setActiveMapTool("navigate");
+      setMeasureA(null);
+    }
   };
 
   const mapPointerMode: MapPointerMode =
-    drawTool === "route" || drawTool === "zone" || pointDropMode ? "crosshair" : "default";
+    drawTool === "route" ||
+    drawTool === "zone" ||
+    pointDropMode ||
+    (Platform.OS === "web" &&
+      (activeMapTool === "buffer" ||
+        activeMapTool === "measure" ||
+        activeMapTool === "draw" ||
+        activeMapTool === "mil_symbol"))
+      ? "crosshair"
+      : "default";
 
   const finishPathDrawing = () => {
     if (drawTool === "route" && pathDraft.length >= 2) {
@@ -853,6 +963,177 @@ export default function MapScreen() {
         ? mgrsLabel
         : `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
 
+  const handleMapPress = (lat: number, lng: number) => {
+    if (drawTool === "route" || drawTool === "zone" || pointDropMode) {
+      onMapTap(lat, lng);
+      return;
+    }
+    if (Platform.OS === "web" && activeMapTool === "draw") {
+      return;
+    }
+    if (Platform.OS === "web" && activeMapTool === "buffer") {
+      setBufferModal({ lat, lng });
+      return;
+    }
+    if (Platform.OS === "web" && activeMapTool === "measure") {
+      if (!measureA) {
+        setMeasureA({ lat, lng });
+        setMeasureHover(null);
+      } else {
+        const dKm = distanceKm(measureA.lat, measureA.lng, lat, lng);
+        const primary = formatDistanceFromKm(dKm, gisMeasureReadoutMode);
+        const other = formatDistanceFromKm(dKm, gisMeasureReadoutMode === "metric" ? "imperial" : "metric");
+        Alert.alert("Measure", `${primary}\n${other}`);
+        setMeasureA(null);
+        setMeasureHover(null);
+      }
+      return;
+    }
+    if (Platform.OS === "web" && activeMapTool === "mil_symbol") {
+      const sidc = tacticalChoicesToSIDC(milAffiliation, milUnit);
+      const creator = username?.trim() || "operator";
+      const feat = ensureFeatureId({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [lng, lat] },
+        properties: {
+          kind: "mil_symbol",
+          sidc,
+          affiliation: milAffiliation,
+          unitType: milUnit,
+          createdAt: Date.now(),
+          createdBy: creator,
+        },
+      });
+      setGisFc((prev) => appendFeature(prev, feat));
+      setActiveMapTool("navigate");
+      return;
+    }
+    setSelectedPin(null);
+    setSelectedGisFeature(null);
+  };
+
+  const onGisFeatureSelectLeaflet = useCallback((f: Feature) => {
+    setSelectedPin(null);
+    setSelectedGisFeature(f);
+  }, []);
+
+  const onMouseMoveLatLng = useCallback(
+    (lat: number, lng: number) => {
+      if (Platform.OS !== "web") return;
+      if (activeMapTool === "measure" && measureA) {
+        setMeasureHover({ lat, lng });
+      }
+      try {
+        const mgrsLib = require("mgrs") as {
+          forward: (ll: [number, number], accuracy?: number) => string;
+        };
+        setCursorMgrs(mgrsLib.forward([lng, lat], 5));
+      } catch {
+        setCursorMgrs("—");
+      }
+    },
+    [activeMapTool, measureA],
+  );
+
+  const onPmCreateLeaflet = useCallback(
+    (feat: Feature) => {
+      const creator = username?.trim() || "operator";
+      const baseProps: Record<string, unknown> = {
+        ...((feat.properties as Record<string, unknown>) ?? {}),
+        createdAt: Date.now(),
+        createdBy: creator,
+      };
+      const g = feat.geometry;
+      if (g?.type === "LineString") {
+        baseProps.kind = "route";
+        baseProps.lineColor = gisGeomanLineColor;
+        try {
+          baseProps.lengthMiles = lineLengthMiles(feat as Feature<LineString>);
+        } catch {
+          /* keep kind only */
+        }
+      } else if (g?.type === "Polygon") {
+        baseProps.kind = "zone";
+        baseProps.zoneStroke = gisGeomanZoneStroke;
+        baseProps.zoneFill = gisGeomanZoneFill;
+      } else {
+        baseProps.kind = baseProps.kind ?? "geoman";
+      }
+      const enriched = ensureFeatureId({ ...feat, properties: baseProps });
+      setGisFc((prev) => appendFeature(prev, enriched));
+      setActiveMapTool("navigate");
+    },
+    [username, gisGeomanLineColor, gisGeomanZoneStroke, gisGeomanZoneFill],
+  );
+
+  const saveGisEncryptedLocal = useCallback(async () => {
+    if (!mapKey) {
+      Alert.alert("GIS", "Map encryption key unavailable. Unlock vault or configure shared map key.");
+      return;
+    }
+    try {
+      const blob = encryptFeatureCollectionJson(gisFc, mapKey);
+      await saveEncryptedGisDraft(blob);
+      Alert.alert("GIS", "Encrypted GeoJSON draft saved on this device (IndexedDB).");
+    } catch (e) {
+      Alert.alert("GIS", e instanceof Error ? e.message : "Save failed.");
+    }
+  }, [gisFc, mapKey]);
+
+  const applyBufferFromModal = () => {
+    if (!bufferModal) return;
+    const km = bufferAmountToKm(bufferRadiusAmount, bufferUnit);
+    const poly = bufferPointKm(bufferModal.lat, bufferModal.lng, km);
+    const creator = username?.trim() || "operator";
+    const feat = ensureFeatureId({
+      ...poly,
+      properties: {
+        kind: "buffer",
+        radiusKm: km,
+        bufferUnit,
+        bufferAmount: bufferRadiusAmount,
+        bufferStroke: gisBufferStroke,
+        bufferFill: gisBufferFill,
+        bufferFillOpacity: 0.14,
+        createdAt: Date.now(),
+        createdBy: creator,
+        center: [bufferModal.lng, bufferModal.lat],
+      },
+    });
+    setGisFc((prev) => appendFeature(prev, feat));
+    setBufferModal(null);
+    setActiveMapTool("navigate");
+  };
+
+  const gisPaletteForMap = useMemo<Partial<GisDrawPalette>>(
+    () => ({
+      bufferStroke: gisBufferStroke,
+      bufferFill: gisBufferFill,
+      lineString: gisGeomanLineColor,
+      polygonStroke: gisGeomanZoneStroke,
+      polygonFill: gisGeomanZoneFill,
+      measure: gisMeasureColor,
+    }),
+    [gisBufferStroke, gisBufferFill, gisGeomanLineColor, gisGeomanZoneStroke, gisGeomanZoneFill, gisMeasureColor],
+  );
+
+  const measurePreviewForMap = useMemo<MeasurePreview | null>(() => {
+    if (Platform.OS !== "web" || activeMapTool !== "measure" || !measureA) return null;
+    return {
+      from: measureA,
+      to: measureHover,
+      color: gisMeasureColor,
+    };
+  }, [activeMapTool, measureA, measureHover, gisMeasureColor]);
+
+  const measureHudDistance =
+    Platform.OS === "web" && activeMapTool === "measure" && measureA && measureHover
+      ? formatDistanceFromKm(
+          distanceKm(measureA.lat, measureA.lng, measureHover.lat, measureHover.lng),
+          gisMeasureReadoutMode,
+        )
+      : null;
+
   const mapHudPadTop = Math.max(10, insets.top + 8);
   const coordStackBelowHud = mapHudPadTop + 54 + 10;
 
@@ -863,13 +1144,29 @@ export default function MapScreen() {
         polylines={mapPolylines}
         polygons={mapPolygons}
         onLongPress={onMapLongPress}
-        onPress={drawTool === "route" || drawTool === "zone" || pointDropMode ? onMapTap : undefined}
+        onPress={handleMapPress}
+        onPinSelect={(p) => {
+          setSelectedGisFeature(null);
+          setSelectedPin(p);
+        }}
         flyTo={flyTo}
         baseLayer={baseLayer}
         userLocation={userLoc}
         pointerMode={mapPointerMode}
         onCenterChange={(lat, lng, zoom) => setCenter({ lat, lng, zoom })}
         mapDimPercent={visualTheme === "nightops" ? mapNightDimPercent : 0}
+        {...(Platform.OS === "web"
+          ? {
+              gisFeatureCollection: gisFc,
+              onGisFeatureSelect: onGisFeatureSelectLeaflet,
+              geomanEnabled: activeMapTool === "draw",
+              onPmCreate: onPmCreateLeaflet,
+              onMouseMoveLatLng,
+              gisMapZoom: center?.zoom,
+              measurePreview: measurePreviewForMap,
+              gisPalette: gisPaletteForMap,
+            }
+          : {})}
       />
       {/* Crosshair */}
       <View pointerEvents="none" style={styles.crosshairWrap}>
@@ -1005,6 +1302,34 @@ export default function MapScreen() {
         stackBelowHudY={coordStackBelowHud}
       />
 
+      {Platform.OS === "web" ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.cursorMgrsHud,
+            {
+              backgroundColor: chrome.surface,
+              borderColor: chrome.border,
+              bottom: (dockToolsRight ? 16 : MIN_SHEET_H + 12) + insets.bottom,
+            },
+          ]}>
+          <Text style={[styles.cursorMgrsLabel, { color: chrome.tabIconDefault }]}>Cursor MGRS</Text>
+          <Text style={[styles.cursorMgrsVal, { color: chrome.text }]} numberOfLines={1}>
+            {cursorMgrs}
+          </Text>
+          {measureHudDistance ? (
+            <>
+              <Text style={[styles.cursorMgrsLabel, { color: chrome.tabIconDefault, marginTop: 6 }]}>
+                Measure ({gisMeasureReadoutMode})
+              </Text>
+              <Text style={[styles.cursorMgrsVal, { color: gisMeasureColor, fontWeight: "800" }]}>
+                {measureHudDistance}
+              </Text>
+            </>
+          ) : null}
+        </View>
+      ) : null}
+
       {loading ? (
         <View style={styles.loader}>
           <ActivityIndicator color={chrome.tint} size="large" />
@@ -1019,6 +1344,245 @@ export default function MapScreen() {
               Team pins & zones sync for everyone with the same unit key. Use Share live so others see your position
               (updates ~20s). Turn on Intel overlay to add Overpass / OSINT on top.
             </Text>
+            {Platform.OS === "web" ? (
+              <>
+                <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Tactical GIS (browser)</Text>
+                <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>
+                  Turf.js buffers, Geoman sketch, milsymbol markers, live MGRS cursor — all client-side. Save encrypts the
+                  GeoJSON to this device only (IndexedDB). Viewshed / elevation need cached DEM tiles (later).
+                </Text>
+                <ChipStrip>
+                  {(
+                    [
+                      ["navigate", "Navigate"],
+                      ["buffer", "Buffer"],
+                      ["measure", "Measure"],
+                      ["draw", "Draw"],
+                      ["mil_symbol", "MIL pt"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <Pressable
+                      key={id}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: activeMapTool === id }}
+                      style={({ pressed }) => [
+                        styles.chip,
+                        {
+                          borderWidth: activeMapTool === id ? 2 : 1,
+                          borderColor: activeMapTool === id ? chrome.tint : chrome.tabIconDefault,
+                          backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                        },
+                      ]}
+                      onPress={() => {
+                        setDrawTool("idle");
+                        setPointDropMode(false);
+                        setPathDraft([]);
+                        setMeasureA(null);
+                        setMeasureHover(null);
+                        setActiveMapTool(id);
+                      }}>
+                      <Text style={[styles.chipLabel, { color: chrome.text }]}>{label}</Text>
+                    </Pressable>
+                  ))}
+                </ChipStrip>
+                {activeMapTool === "measure" ? (
+                  <>
+                    <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>
+                      {measureA
+                        ? "Move the cursor for a live line, then tap the second point."
+                        : "Tap the map for the first point."}
+                    </Text>
+                    <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Readout</Text>
+                    <ChipStrip>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.chip,
+                          {
+                            borderWidth: gisMeasureReadoutMode === "metric" ? 2 : 1,
+                            borderColor: gisMeasureReadoutMode === "metric" ? chrome.tint : chrome.tabIconDefault,
+                            backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                          },
+                        ]}
+                        onPress={() => setGisMeasureReadoutMode("metric")}>
+                        <Text style={[styles.chipLabel, { color: chrome.text }]}>Metric</Text>
+                      </Pressable>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.chip,
+                          {
+                            borderWidth: gisMeasureReadoutMode === "imperial" ? 2 : 1,
+                            borderColor: gisMeasureReadoutMode === "imperial" ? chrome.tint : chrome.tabIconDefault,
+                            backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                          },
+                        ]}
+                        onPress={() => setGisMeasureReadoutMode("imperial")}>
+                        <Text style={[styles.chipLabel, { color: chrome.text }]}>Imperial</Text>
+                      </Pressable>
+                    </ChipStrip>
+                    <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Measure color</Text>
+                    <ChipStrip>
+                      {GIS_COLOR_SWATCHES.map((c) => (
+                        <Pressable
+                          key={`m-${c}`}
+                          onPress={() => setGisMeasureColor(c)}
+                          accessibilityLabel={`Measure color ${c}`}
+                          style={[
+                            styles.gisColorSwatchOuter,
+                            {
+                              borderColor: gisMeasureColor === c ? chrome.tint : chrome.border,
+                              borderWidth: gisMeasureColor === c ? 2 : 1,
+                            },
+                          ]}>
+                          <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
+                        </Pressable>
+                      ))}
+                    </ChipStrip>
+                  </>
+                ) : null}
+                {activeMapTool === "mil_symbol" ? (
+                  <>
+                    <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>MIL affiliation</Text>
+                    <ChipStrip>
+                      {(
+                        [
+                          ["friendly", "Fr"],
+                          ["hostile", "Ho"],
+                          ["neutral", "Ne"],
+                          ["unknown", "Un"],
+                        ] as const
+                      ).map(([id, label]) => (
+                        <Pressable
+                          key={id}
+                          style={({ pressed }) => [
+                            styles.chip,
+                            {
+                              borderWidth: milAffiliation === id ? 2 : 1,
+                              borderColor: milAffiliation === id ? chrome.tint : chrome.tabIconDefault,
+                              backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                            },
+                          ]}
+                          onPress={() => setMilAffiliation(id)}>
+                          <Text style={[styles.chipLabel, { color: chrome.text }]}>{label}</Text>
+                        </Pressable>
+                      ))}
+                    </ChipStrip>
+                    <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>MIL type</Text>
+                    <ChipStrip>
+                      {(
+                        [
+                          ["infantry", "Inf"],
+                          ["medical", "Med"],
+                          ["supply", "Sply"],
+                          ["unknown", "?"],
+                        ] as const
+                      ).map(([id, label]) => (
+                        <Pressable
+                          key={id}
+                          style={({ pressed }) => [
+                            styles.chip,
+                            {
+                              borderWidth: milUnit === id ? 2 : 1,
+                              borderColor: milUnit === id ? chrome.tint : chrome.tabIconDefault,
+                              backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                            },
+                          ]}
+                          onPress={() => setMilUnit(id)}>
+                          <Text style={[styles.chipLabel, { color: chrome.text }]}>{label}</Text>
+                        </Pressable>
+                      ))}
+                    </ChipStrip>
+                  </>
+                ) : null}
+                <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Sketch colors (Geoman)</Text>
+                <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>Line</Text>
+                <ChipStrip>
+                  {GIS_COLOR_SWATCHES.map((c) => (
+                    <Pressable
+                      key={`ln-${c}`}
+                      onPress={() => setGisGeomanLineColor(c)}
+                      accessibilityLabel={`Line color ${c}`}
+                      style={[
+                        styles.gisColorSwatchOuter,
+                        {
+                          borderColor: gisGeomanLineColor === c ? chrome.tint : chrome.border,
+                          borderWidth: gisGeomanLineColor === c ? 2 : 1,
+                        },
+                      ]}>
+                      <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
+                    </Pressable>
+                  ))}
+                </ChipStrip>
+                <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>Zone outline</Text>
+                <ChipStrip>
+                  {GIS_COLOR_SWATCHES.map((c) => (
+                    <Pressable
+                      key={`zs-${c}`}
+                      onPress={() => setGisGeomanZoneStroke(c)}
+                      accessibilityLabel={`Zone stroke ${c}`}
+                      style={[
+                        styles.gisColorSwatchOuter,
+                        {
+                          borderColor: gisGeomanZoneStroke === c ? chrome.tint : chrome.border,
+                          borderWidth: gisGeomanZoneStroke === c ? 2 : 1,
+                        },
+                      ]}>
+                      <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
+                    </Pressable>
+                  ))}
+                </ChipStrip>
+                <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>Zone fill</Text>
+                <ChipStrip>
+                  {GIS_COLOR_SWATCHES.map((c) => (
+                    <Pressable
+                      key={`zf-${c}`}
+                      onPress={() => setGisGeomanZoneFill(c)}
+                      accessibilityLabel={`Zone fill ${c}`}
+                      style={[
+                        styles.gisColorSwatchOuter,
+                        {
+                          borderColor: gisGeomanZoneFill === c ? chrome.tint : chrome.border,
+                          borderWidth: gisGeomanZoneFill === c ? 2 : 1,
+                        },
+                      ]}>
+                      <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
+                    </Pressable>
+                  ))}
+                </ChipStrip>
+                <ChipStrip>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.chip,
+                      { opacity: 0.45, borderColor: chrome.tabIconDefault },
+                      pressed ? { opacity: 0.35 } : null,
+                    ]}
+                    disabled
+                    accessibilityState={{ disabled: true }}>
+                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Viewshed</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.chip,
+                      { opacity: 0.45, borderColor: chrome.tabIconDefault },
+                      pressed ? { opacity: 0.35 } : null,
+                    ]}
+                    disabled
+                    accessibilityState={{ disabled: true }}>
+                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Elev profile</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.chip,
+                      {
+                        borderColor: chrome.accent,
+                        backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                      },
+                    ]}
+                    onPress={() => void saveGisEncryptedLocal()}>
+                    <Text style={[styles.chipLabel, { color: chrome.text }]}>Save GIS (encrypted)</Text>
+                  </Pressable>
+                </ChipStrip>
+              </>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push("/(app)/map-exports")}
@@ -1109,6 +1673,8 @@ export default function MapScreen() {
                   } else {
                     setPathDraft([]);
                     setDrawTool("idle");
+                    setActiveMapTool("navigate");
+                    setMeasureA(null);
                     setPointDropMode(true);
                   }
                 }}>
@@ -1428,43 +1994,250 @@ export default function MapScreen() {
           if (categoryPick) void saveTacticalFeature(cat, categoryPick);
         }}
       />
+      <Modal
+        visible={Platform.OS === "web" && !!bufferModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBufferModal(null)}>
+        <View style={styles.bufferModalBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFillObject}
+            onPress={() => setBufferModal(null)}
+            accessibilityLabel="Dismiss buffer dialog"
+          />
+          <View
+            style={[
+              styles.bufferModalCard,
+              { backgroundColor: chrome.surface, borderColor: chrome.border },
+            ]}>
+            <Text style={[styles.bufferModalTitle, { color: chrome.text }]}>Buffer radius</Text>
+            <ChipStrip>
+              {(
+                [
+                  ["km", "km"],
+                  ["m", "m"],
+                  ["mi", "mi"],
+                  ["yd", "yd"],
+                ] as const
+              ).map(([u, label]) => (
+                <Pressable
+                  key={u}
+                  style={({ pressed }) => [
+                    styles.chip,
+                    {
+                      borderWidth: bufferUnit === u ? 2 : 1,
+                      borderColor: bufferUnit === u ? chrome.tint : chrome.tabIconDefault,
+                      backgroundColor: pressed ? (scheme === "dark" ? "#18181b" : "#f4f4f5") : "transparent",
+                    },
+                  ]}
+                  onPress={() => {
+                    if (u === bufferUnit) return;
+                    setBufferRadiusAmount((amt) => {
+                      const conv = convertAmountBetweenUnits(amt, bufferUnit, u);
+                      const { min, max } = BUFFER_RANGE[u];
+                      return Math.max(min, Math.min(max, conv));
+                    });
+                    setBufferUnit(u);
+                  }}>
+                  <Text style={[styles.chipLabel, { color: chrome.text }]}>{label}</Text>
+                </Pressable>
+              ))}
+            </ChipStrip>
+            <Text style={[styles.drawHint, { color: chrome.tabIconDefault }]}>
+              {bufferUnit === "km" && "Kilometers"}
+              {bufferUnit === "m" && "Meters"}
+              {bufferUnit === "mi" && "Miles"}
+              {bufferUnit === "yd" && "Yards"}
+              {`: ${bufferRadiusAmount.toFixed(bufferUnit === "mi" || bufferUnit === "km" ? 3 : 0)}`}
+            </Text>
+            <View style={styles.bufferSliderRow}>
+              <Text style={{ color: chrome.tabIconDefault, fontSize: 11 }}>Min</Text>
+              <Slider
+                key={`buffer-radius-${bufferUnit}`}
+                style={styles.bufferSlider}
+                minimumValue={BUFFER_RANGE[bufferUnit].min}
+                maximumValue={BUFFER_RANGE[bufferUnit].max}
+                step={BUFFER_RANGE[bufferUnit].step}
+                value={bufferRadiusAmount}
+                onValueChange={(v) => setBufferRadiusAmount(v)}
+                minimumTrackTintColor={chrome.tint}
+                maximumTrackTintColor={chrome.border}
+                thumbTintColor={Platform.OS === "ios" ? undefined : chrome.tint}
+              />
+              <Text style={{ color: chrome.tabIconDefault, fontSize: 11 }}>Max</Text>
+            </View>
+            <Text style={[styles.fieldLabel, { color: chrome.tabIconDefault }]}>Buffer colors</Text>
+            <ChipStrip>
+              {GIS_COLOR_SWATCHES.map((c) => (
+                <Pressable
+                  key={`bf-${c}`}
+                  onPress={() => {
+                    setGisBufferStroke(c);
+                    setGisBufferFill(c);
+                  }}
+                  accessibilityLabel={`Buffer color ${c}`}
+                  style={[
+                    styles.gisColorSwatchOuter,
+                    {
+                      borderColor: gisBufferStroke === c && gisBufferFill === c ? chrome.tint : chrome.border,
+                      borderWidth: gisBufferStroke === c && gisBufferFill === c ? 2 : 1,
+                    },
+                  ]}>
+                  <View style={[styles.gisColorSwatchInner, { backgroundColor: c }]} />
+                </Pressable>
+              ))}
+            </ChipStrip>
+            <View style={styles.bufferModalRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.bufferModalSecondary,
+                  { borderColor: chrome.border, opacity: pressed ? 0.85 : 1 },
+                ]}
+                onPress={() => setBufferModal(null)}>
+                <Text style={{ color: chrome.text, fontWeight: "700" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.bufferModalPrimary,
+                  { backgroundColor: chrome.tint, opacity: pressed ? 0.9 : 1 },
+                ]}
+                onPress={applyBufferFromModal}>
+                <Text style={{ color: onTintLabel, fontWeight: "800" }}>Apply</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
       {dockToolsRight ? (
         <>
           <View style={styles.mapCol}>
             <View style={styles.mapFill}>{mapNode}</View>
+            {mapToolsDockCollapsed ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Show map tools sidebar"
+                onPress={() => persistMapToolsDockCollapsed(false)}
+                style={({ pressed }) => [
+                  styles.mapDockExpandFab,
+                  {
+                    top: coordStackBelowHud + 6,
+                    backgroundColor: chrome.surface,
+                    borderColor: chrome.border,
+                    opacity: pressed ? 0.92 : 1,
+                    ...(Platform.OS === "web"
+                      ? { boxShadow: "0 2px 14px rgba(0,0,0,0.2)" }
+                      : { elevation: 6 }),
+                  },
+                ]}>
+                <FontAwesome name="chevron-left" size={14} color={chrome.tint} />
+                <Text style={[styles.mapDockExpandFabTx, { color: chrome.text }]}>Map tools</Text>
+              </Pressable>
+            ) : null}
           </View>
-          <View
-            style={[
-              styles.toolsDock,
-              {
-                backgroundColor: chrome.background,
-                borderLeftColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
-                paddingTop: insets.top > 0 ? 8 : 0,
-              },
-            ]}>
+          {selectedGisFeature ? (
+            <MapGisFeaturePanel
+              feature={selectedGisFeature}
+              chrome={chrome}
+              variant="trailing"
+              onDismiss={() => setSelectedGisFeature(null)}
+              onCenterMap={(lat, lng) => flyToCoords(lat, lng, 14)}
+              onAccentLabel={onTintLabel}
+              movementMph={routeEtaMph}
+              onMovementMphChange={setRouteEtaMph}
+            />
+          ) : selectedPin ? (
+            <MapIntelPanel
+              pin={selectedPin}
+              chrome={chrome}
+              variant="trailing"
+              onDismiss={() => setSelectedPin(null)}
+              onCenterMap={() => {
+                flyToCoords(selectedPin.lat, selectedPin.lng, 14);
+              }}
+              onAccentLabel={onTintLabel}
+            />
+          ) : null}
+          {!mapToolsDockCollapsed ? (
             <View
               style={[
-                styles.toolsDockHead,
-                { borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
+                styles.toolsDock,
+                {
+                  backgroundColor: chrome.background,
+                  borderLeftColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
+                  paddingTop: insets.top > 0 ? 8 : 0,
+                },
               ]}>
-              <Text style={[styles.panelTitle, { color: chrome.tabIconDefault }]}>Map tools</Text>
-              <Text style={[styles.toolsDockHint, { color: chrome.tabIconDefault }]}>
-                Desktop sidebar · turn off in Settings
-              </Text>
+              <View
+                style={[
+                  styles.toolsDockHead,
+                  { borderBottomColor: scheme === "dark" ? "#27272a" : "#e4e4e7" },
+                ]}>
+                <View style={styles.toolsDockHeadRow}>
+                  <View style={styles.toolsDockHeadTitles}>
+                    <Text style={[styles.panelTitle, { color: chrome.tabIconDefault }]}>Map tools</Text>
+                    <Text style={[styles.toolsDockHint, { color: chrome.tabIconDefault }]}>
+                      Desktop sidebar · turn off in Settings
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Hide map tools for fullscreen map"
+                    onPress={() => persistMapToolsDockCollapsed(true)}
+                    style={({ pressed }) => [
+                      styles.toolsDockCollapseBtn,
+                      {
+                        borderColor: chrome.border,
+                        backgroundColor: pressed ? chrome.panel : "transparent",
+                      },
+                    ]}>
+                    <FontAwesome name="chevron-right" size={16} color={chrome.tint} />
+                  </Pressable>
+                </View>
+              </View>
+              <ScrollView
+                style={[
+                  styles.toolsDockScroll,
+                  Platform.OS === "web" ? ({ touchAction: "pan-y" } as const) : null,
+                ]}
+                contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom + 8 }]}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsVerticalScrollIndicator>
+                {mapToolsInner}
+              </ScrollView>
             </View>
-            <ScrollView
-              style={styles.toolsDockScroll}
-              contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom + 8 }]}
-              keyboardShouldPersistTaps="handled"
-              nestedScrollEnabled
-              showsVerticalScrollIndicator>
-              {mapToolsInner}
-            </ScrollView>
-          </View>
+          ) : null}
         </>
       ) : (
-        <>
+        <View style={styles.mobileMapStack}>
           <View style={styles.mapFill}>{mapNode}</View>
+          {selectedGisFeature ? (
+            <MapGisFeaturePanel
+              feature={selectedGisFeature}
+              chrome={chrome}
+              variant="bottom"
+              onDismiss={() => setSelectedGisFeature(null)}
+              onCenterMap={(lat, lng) => flyToCoords(lat, lng, 14)}
+              onAccentLabel={onTintLabel}
+              scrollPanY
+              maxBottomPx={Math.round(windowH * 0.5)}
+              movementMph={routeEtaMph}
+              onMovementMphChange={setRouteEtaMph}
+            />
+          ) : selectedPin ? (
+            <MapIntelPanel
+              pin={selectedPin}
+              chrome={chrome}
+              variant="bottom"
+              onDismiss={() => setSelectedPin(null)}
+              onCenterMap={() => {
+                flyToCoords(selectedPin.lat, selectedPin.lng, 14);
+              }}
+              onAccentLabel={onTintLabel}
+              scrollPanY
+              maxBottomPx={Math.round(windowH * 0.5)}
+            />
+          ) : null}
 
           <View
             style={[
@@ -1475,7 +2248,7 @@ export default function MapScreen() {
                 borderTopColor: scheme === "dark" ? "#27272a" : "#e4e4e7",
                 transform: [{ translateX: sheetOffsetX }],
                 paddingBottom: Platform.OS === "web" ? insets.bottom : 0,
-                maxHeight: Platform.OS === "web" ? windowH * 0.92 : undefined,
+                maxHeight: windowH * 0.5,
               },
             ]}>
             <View
@@ -1511,7 +2284,10 @@ export default function MapScreen() {
 
             {sheetExpanded ? (
               <ScrollView
-                style={styles.sheetBodyScroll}
+                style={[
+                  styles.sheetBodyScroll,
+                  Platform.OS === "web" ? ({ touchAction: "pan-y" } as const) : null,
+                ]}
                 contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom }]}
                 keyboardShouldPersistTaps="handled"
                 nestedScrollEnabled
@@ -1520,7 +2296,7 @@ export default function MapScreen() {
               </ScrollView>
             ) : null}
           </View>
-        </>
+        </View>
       )}
     </View>
   );
@@ -1535,10 +2311,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "stretch",
   },
+  /** Calcite-style column: map canvas + optional intel strip + anchored tools sheet. */
+  mobileMapStack: {
+    flex: 1,
+    minHeight: 0,
+    width: "100%" as const,
+  },
   mapCol: {
     flex: 1,
     minHeight: 0,
     minWidth: 0,
+    position: "relative",
+  },
+  mapDockExpandFab: {
+    position: "absolute",
+    right: 12,
+    zIndex: 1250,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  mapDockExpandFabTx: {
+    fontSize: 13,
+    fontWeight: "800",
   },
   /** Map fills the column; bottom sheet overlays on mobile, sidebar sits beside on desktop dock. */
   mapFill: {
@@ -1560,6 +2359,22 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     gap: 4,
+  },
+  toolsDockHeadRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  toolsDockHeadTitles: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  toolsDockCollapseBtn: {
+    marginTop: -2,
+    padding: 8,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   toolsDockHint: {
     fontSize: 10,
@@ -1599,10 +2414,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.12)",
   },
   sheet: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
+    flexShrink: 0,
+    width: "100%" as const,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -1933,5 +2746,90 @@ const styles = StyleSheet.create({
   runBtnLabel: {
     fontSize: 16,
     fontWeight: "700",
+  },
+  cursorMgrsHud: {
+    position: "absolute",
+    left: 10,
+    zIndex: 600,
+    maxWidth: "92%" as const,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  cursorMgrsLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    marginBottom: 2,
+  },
+  cursorMgrsVal: {
+    fontSize: 11,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+  },
+  bufferModalBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.5)",
+    padding: 24,
+  },
+  bufferModalCard: {
+    width: "100%" as const,
+    maxWidth: 400,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 16,
+    gap: 12,
+    zIndex: 2,
+  },
+  bufferModalTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  bufferModalInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+  },
+  bufferModalRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 4,
+  },
+  bufferModalSecondary: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  bufferModalPrimary: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  bufferSliderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  bufferSlider: {
+    flex: 1,
+    minWidth: 0,
+    height: 40,
+  },
+  gisColorSwatchOuter: {
+    padding: 3,
+    borderRadius: 8,
+  },
+  gisColorSwatchInner: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
   },
 });

@@ -5,6 +5,7 @@ import { Platform, StyleSheet, View } from "react-native";
 
 import { TacticalClockBadge } from "@/components/chrome/TacticalClockBadge";
 import { MMTabBar } from "@/components/navigation/MMTabBar";
+import { OpsScreeningGate } from "@/components/ops/OpsScreeningGate";
 import { ScorchedEarthListener } from "@/components/ScorchedEarthListener";
 import { useDeadManMonitor } from "@/hooks/useDeadManMonitor";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
@@ -26,6 +27,7 @@ export default function AppLayout() {
   return (
     <View style={styles.shell}>
       <ScorchedEarthListener />
+      <OpsScreeningGate />
       <Tabs
         tabBar={(props) => <MMTabBar {...props} />}
         screenOptions={{

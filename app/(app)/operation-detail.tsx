@@ -19,10 +19,10 @@ import { MissionPlanModal } from "@/components/ops/MissionPlanModal";
 import { SitrepModal } from "@/components/ops/SitrepModal";
 import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
 import Colors from "@/constants/Colors";
-import { decryptUtf8 } from "@/lib/crypto/aesGcm";
 import {
     OPERATION_HUB_AAD,
     OPS_AAD,
+    OPS_TEAM_DECRYPT_HELP,
     formatAarForDisplay,
     formatDocKindLabel,
     formatIntelReportForDisplay,
@@ -30,6 +30,7 @@ import {
     formatSitrepForDisplay,
     formatTargetPackageForDisplay,
     previewOpsRow,
+    tryDecryptUtf8WithKeys,
     type AarPayloadV1,
     type IntelReportPayloadV1,
     type MissionPlanPayloadV1,
@@ -38,7 +39,7 @@ import {
     type SitrepPayloadV1,
     type TargetPackagePayloadV1,
 } from "@/lib/opsReports";
-import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
+import { collectOpsDecryptCandidates, resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
 type HubRow = {
   id: string;
@@ -73,13 +74,20 @@ export default function OperationDetailScreen() {
   const mainKey = useMMStore((s) => s.mainVaultKey);
   const decoyKey = useMMStore((s) => s.decoyVaultKey);
 
+  const teamMapSharedKeyHex = useMMStore((s) => s.teamMapSharedKeyHex);
+
   const mapKey = useMemo(() => {
     try {
       return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex]);
+
+  const decryptCandidates = useMemo(
+    () => collectOpsDecryptCandidates(mainKey, decoyKey, vaultMode),
+    [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex],
+  );
 
   const [tab, setTab] = useState<TabKey>("reports");
   const [hubRow, setHubRow] = useState<HubRow | null>(null);
@@ -124,24 +132,34 @@ export default function OperationDetailScreen() {
   );
 
   const hubTitle = useMemo(() => {
-    if (!hubRow || !mapKey || mapKey.length !== 32) return "Operation";
+    if (!hubRow) return "Operation";
+    if (decryptCandidates.length === 0) return "Operation";
+    const json = tryDecryptUtf8WithKeys(hubRow.encrypted_payload, OPERATION_HUB_AAD, decryptCandidates);
+    if (!json) return "(cannot decrypt)";
     try {
-      const json = decryptUtf8(mapKey, hubRow.encrypted_payload, OPERATION_HUB_AAD);
       const parsed = JSON.parse(json) as OperationHubPayloadV1;
       return parsed.title || "Operation";
     } catch {
       return "(cannot decrypt)";
     }
-  }, [hubRow, mapKey]);
+  }, [hubRow, decryptCandidates]);
 
   const openReport = (row: ScopedOpsRow) => {
-    if (!mapKey || mapKey.length !== 32) {
-      Alert.alert("Reports", "Decrypt key unavailable.");
+    if (decryptCandidates.length === 0) {
+      Alert.alert("Reports", "No decrypt key available. Set a team key in Settings or unlock your vault.");
+      return;
+    }
+    const aad = OPS_AAD[row.doc_kind];
+    const json = tryDecryptUtf8WithKeys(row.encrypted_payload, aad, decryptCandidates);
+    if (!json) {
+      setDocDetail({
+        title: "Cannot decrypt",
+        body: OPS_TEAM_DECRYPT_HELP,
+        subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
+      });
       return;
     }
     try {
-      const aad = OPS_AAD[row.doc_kind];
-      const json = decryptUtf8(mapKey, row.encrypted_payload, aad);
       let body = json;
       let displayTitle = previewOpsRow(row.doc_kind, json);
       if (row.doc_kind === "mission_plan") {
@@ -163,7 +181,11 @@ export default function OperationDetailScreen() {
         subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
       });
     } catch {
-      Alert.alert("Reports", "Cannot decrypt.");
+      setDocDetail({
+        title: "Cannot decrypt",
+        body: OPS_TEAM_DECRYPT_HELP,
+        subtitle: `${formatDocKindLabel(row.doc_kind)} · ${row.author_username} · ${row.created_at}`,
+      });
     }
   };
 
@@ -241,13 +263,9 @@ export default function OperationDetailScreen() {
           ListEmptyComponent={<Text style={{ color: p.tabIconDefault }}>No reports for this operation yet.</Text>}
           renderItem={({ item }) => {
             let headline: string = item.doc_kind;
-            if (mapKey?.length === 32) {
-              try {
-                const json = decryptUtf8(mapKey, item.encrypted_payload, OPS_AAD[item.doc_kind]);
-                headline = previewOpsRow(item.doc_kind, json);
-              } catch {
-                headline = "(locked)";
-              }
+            if (decryptCandidates.length > 0) {
+              const j = tryDecryptUtf8WithKeys(item.encrypted_payload, OPS_AAD[item.doc_kind], decryptCandidates);
+              headline = j ? previewOpsRow(item.doc_kind, j) : "(locked)";
             }
             return (
               <Pressable

@@ -84,27 +84,25 @@ export function CalendarScreen() {
     [viewMonth, selectedDay],
   );
 
-  const reloadForMode = useCallback(
-    async (mode: "real" | "decoy") => {
-      const key = getCalendarSessionKey();
-      if (!key || !profileId) return;
-      const rows = await fetchEncryptedEvents(supabase, mode);
-      const next: { rowId: string; plain: CalendarEventPlain }[] = [];
-      for (const r of rows) {
-        const dec = tryDecryptRow(key, r.id, r.author_id, r.encrypted_payload);
-        if (dec) next.push({ rowId: dec.rowId, plain: dec.plain });
-      }
-      const have = new Set(next.map((e) => e.rowId));
-      const ids = await offlineListEventIds(mode);
-      for (const id of ids) {
-        if (have.has(id)) continue;
-        const plain = await offlineGetEvent(mode, id);
-        if (plain) next.push({ rowId: id, plain });
-      }
-      setEvents(next);
-    },
-    [supabase, profileId],
-  );
+  const reloadForMode = useCallback(async (mode: "real" | "decoy") => {
+    const key = getCalendarSessionKey();
+    const { profileId: pid, supabase: sb } = useMMStore.getState();
+    if (!key || !pid) return;
+    const rows = await fetchEncryptedEvents(sb, mode);
+    const next: { rowId: string; plain: CalendarEventPlain }[] = [];
+    for (const r of rows) {
+      const dec = tryDecryptRow(key, r.id, r.author_id, r.encrypted_payload);
+      if (dec) next.push({ rowId: dec.rowId, plain: dec.plain });
+    }
+    const have = new Set(next.map((e) => e.rowId));
+    const ids = await offlineListEventIds(mode);
+    for (const id of ids) {
+      if (have.has(id)) continue;
+      const plain = await offlineGetEvent(mode, id);
+      if (plain) next.push({ rowId: id, plain });
+    }
+    setEvents(next);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -124,6 +122,10 @@ export function CalendarScreen() {
       };
     }, []),
   );
+
+  useEffect(() => {
+    void useMMStore.getState().reconcileProfileIdFromJwt();
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
@@ -170,7 +172,9 @@ export function CalendarScreen() {
       setPinError("Enter a valid PIN.");
       return;
     }
-    if (!profileId) {
+    await useMMStore.getState().reconcileProfileIdFromJwt();
+    const { profileId: pid, supabase: sb } = useMMStore.getState();
+    if (!pid) {
       setPinError("Not signed in.");
       return;
     }
@@ -178,9 +182,7 @@ export function CalendarScreen() {
     setPinError(null);
     const pinThis = pinText;
     try {
-      const { data: prof, error: pErr } = supabase
-        ? await fetchCalendarProfileRow(supabase, profileId)
-        : { data: null, error: null };
+      const { data: prof, error: pErr } = sb ? await fetchCalendarProfileRow(sb, pid) : { data: null, error: null };
       if (pErr) throw pErr;
       const route = await resolveCalendarPinRoute(pinThis, prof);
       if (route === "invalid") {
@@ -241,7 +243,8 @@ export function CalendarScreen() {
 
   const saveEvent = async () => {
     const key = getCalendarSessionKey();
-    if (!key || !calMode || !profileId) return;
+    const { profileId: pid, supabase: sb } = useMMStore.getState();
+    if (!key || !calMode || !pid) return;
     const plain: CalendarEventPlain = {
       v: 1,
       type: evtType,
@@ -252,7 +255,7 @@ export function CalendarScreen() {
       endIso: new Date(endIso).toISOString(),
       description,
     };
-    const { error } = await pushNewEvent(supabase, profileId, calMode, key, plain);
+    const { error } = await pushNewEvent(sb, pid, calMode, key, plain);
     if (error) Alert.alert("Calendar", error);
     setFormOpen(false);
     await reloadForMode(calMode);

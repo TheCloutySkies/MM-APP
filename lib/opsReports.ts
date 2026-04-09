@@ -3,6 +3,30 @@
  * Decryption key: same as map markers — `resolveMapEncryptKey` + optional `EXPO_PUBLIC_MM_MAP_SHARED_KEY`.
  */
 
+import { decryptUtf8 } from "./crypto/aesGcm";
+
+/** Shown when no candidate key decrypts ciphertext (Settings team key + env + vault partitions). */
+export const OPS_TEAM_DECRYPT_HELP = `This item is encrypted end-to-end. None of the keys on this device could open it.
+
+If your unit shares one operations key: open Settings → Team operations key and paste the same 64-character hex (only 0–9 and a–f) that everyone else uses. That matches map markers and all mission hub reports.
+
+If your build already embeds EXPO_PUBLIC_MM_MAP_SHARED_KEY, it must be identical to the key the author used when they saved.
+
+If the author encrypted using only their personal vault (no shared team key), only someone with that same vault material can read it. Ask them to save again using the unit shared key so the whole team can open it.`;
+
+/** Try AES-GCM decrypt with each 32-byte key until one succeeds. */
+export function tryDecryptUtf8WithKeys(ciphertext: string, aad: string, keys: Uint8Array[]): string | null {
+  for (const key of keys) {
+    if (key.length !== 32) continue;
+    try {
+      return decryptUtf8(key, ciphertext, aad);
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return null;
+}
+
 export type OpsDocKind =
   | "mission_plan"
   | "sitrep"

@@ -21,11 +21,12 @@ import {
     OPS_AAD,
     formatMissionForDisplay,
     previewOpsRow,
+    tryDecryptUtf8WithKeys,
     type MissionPlanPayloadV1,
     type OperationHubPayloadV1,
     type OpsDocKind,
 } from "@/lib/opsReports";
-import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
+import { collectOpsDecryptCandidates, resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
 type LegacyMissionRow = { id: string; ciphertext: string; created_at: string };
 
@@ -66,13 +67,20 @@ export default function MissionsScreen() {
   const mainKey = useMMStore((s) => s.mainVaultKey);
   const decoyKey = useMMStore((s) => s.decoyVaultKey);
 
+  const teamMapSharedKeyHex = useMMStore((s) => s.teamMapSharedKeyHex);
+
   const mapKey = useMemo(() => {
     try {
       return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex]);
+
+  const decryptCandidates = useMemo(
+    () => collectOpsDecryptCandidates(mainKey, decoyKey, vaultMode),
+    [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex],
+  );
 
   const activeVaultKey =
     vaultMode === "main" ? mainKey : vaultMode === "decoy" ? decoyKey : null;
@@ -149,13 +157,6 @@ export default function MissionsScreen() {
   }, [legacyRows, opsRows]);
 
   const openRow = (item: CombinedRow) => {
-    if (!mapKey || mapKey.length !== 32) {
-      Alert.alert(
-        "Missions",
-        "Team mission plans use the shared map key. It is now bundled from wrangler.toml — rebuild the app or pull latest. You can still unlock the main vault if you do not use the shared key.",
-      );
-      return;
-    }
     try {
       if (item.source === "legacy") {
         if (!activeVaultKey || activeVaultKey.length !== 32) {
@@ -171,8 +172,22 @@ export default function MissionsScreen() {
         );
         return;
       }
+      if (decryptCandidates.length === 0) {
+        Alert.alert(
+          "Missions",
+          "No team decrypt key. Unlock your vault or set the same 64-char team key in Settings that the author used.",
+        );
+        return;
+      }
       const aad = OPS_AAD.mission_plan;
-      const json = decryptUtf8(mapKey, item.encrypted_payload, aad);
+      const json = tryDecryptUtf8WithKeys(item.encrypted_payload, aad, decryptCandidates);
+      if (!json) {
+        Alert.alert(
+          "Missions",
+          "Cannot decrypt this plan. In Settings → Team operations key, paste the same 64-character hex the unit shares (or unlock the vault partition the author used).",
+        );
+        return;
+      }
       const parsed = JSON.parse(json) as MissionPlanPayloadV1;
       setTeamMission({
         headerTitle: `${parsed.title} · ${item.author_username}`,
@@ -192,7 +207,9 @@ export default function MissionsScreen() {
         <Text style={[styles.lede, { color: p.tabIconDefault }]}>
           Doctrine-style mission planning. Create an operation first — that becomes the dashboard shell where mission plans
           roll up; file field reports from the <Text style={{ fontWeight: "800" }}>Reports</Text> tab or inside an operation
-          hub. Team crypto matches shared map markers when EXPO_PUBLIC_MM_MAP_SHARED_KEY is set (32-byte hex).
+          hub. Team crypto uses the same 32-byte key as map markers: set EXPO_PUBLIC_MM_MAP_SHARED_KEY in the build, or
+          paste the identical 64-character hex under Settings → Team operations key so you can open the same ciphertext as
+          your unit without rebuilding.
         </Text>
 
         <Text style={[styles.section, { color: p.tabIconDefault }]}>New operation</Text>
@@ -225,11 +242,17 @@ export default function MissionsScreen() {
         ) : null}
         {hubs.map((item) => {
           let title = "Operation";
-          if (mapKey?.length === 32) {
-            try {
-              const json = decryptUtf8(mapKey, item.encrypted_payload, OPERATION_HUB_AAD);
-              title = (JSON.parse(json) as OperationHubPayloadV1).title;
-            } catch {
+          if (decryptCandidates.length === 0) {
+            title = "(need team key or vault)";
+          } else {
+            const j = tryDecryptUtf8WithKeys(item.encrypted_payload, OPERATION_HUB_AAD, decryptCandidates);
+            if (j) {
+              try {
+                title = (JSON.parse(j) as OperationHubPayloadV1).title;
+              } catch {
+                title = "(cannot decrypt)";
+              }
+            } else {
               title = "(cannot decrypt)";
             }
           }
@@ -259,13 +282,11 @@ export default function MissionsScreen() {
           let title = "…";
           let sub = item.created_at;
           if (item.source === "ops") {
-            try {
-              if (mapKey?.length === 32) {
-                const json = decryptUtf8(mapKey, item.encrypted_payload, OPS_AAD.mission_plan);
-                title = previewOpsRow("mission_plan", json);
-              }
-            } catch {
-              title = "(cannot decrypt)";
+            if (decryptCandidates.length === 0) {
+              title = "(need team key or vault)";
+            } else {
+              const j = tryDecryptUtf8WithKeys(item.encrypted_payload, OPS_AAD.mission_plan, decryptCandidates);
+              title = j ? previewOpsRow("mission_plan", j) : "(cannot decrypt)";
             }
             sub = `${item.author_username} · ${item.created_at}`;
           } else if (item.source === "legacy" && activeVaultKey?.length === 32) {

@@ -7,6 +7,7 @@ import { AarModal } from "@/components/ops/AarModal";
 import { IntelReportModal } from "@/components/ops/IntelReportModal";
 import { SitrepModal } from "@/components/ops/SitrepModal";
 import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
+import { TacticalBlock } from "@/components/shell/TacticalBlock";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
@@ -66,29 +67,30 @@ export default function ReportsScreen() {
           </View>
         </Pressable>
 
-        <Text style={[styles.section, { color: p.tabIconDefault }]}>New report</Text>
-        <View style={styles.reportRow}>
-          <Pressable
-            style={[styles.reportChip, { borderColor: p.tint }]}
-            onPress={() => (mapKey ? setShowSitrepModal(true) : needKey())}>
-            <Text style={[styles.chipTx, { color: p.tint }]}>SITREP</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.reportChip, { borderColor: p.tint }]}
-            onPress={() => (mapKey ? setShowAarModal(true) : needKey())}>
-            <Text style={[styles.chipTx, { color: p.tint }]}>AAR</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.reportChip, { borderColor: p.tint }]}
-            onPress={() => (mapKey ? setShowTargetModal(true) : needKey())}>
-            <Text style={[styles.chipTx, { color: p.tint }]}>Target pkg</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.reportChip, { borderColor: p.tint }]}
-            onPress={() => (mapKey ? setShowIntelModal(true) : needKey())}>
-            <Text style={[styles.chipTx, { color: p.tint }]}>Intel</Text>
-          </Pressable>
-        </View>
+        <TacticalBlock title="New report" defaultOpen>
+          <View style={styles.reportRow}>
+            <Pressable
+              style={[styles.reportChip, { borderColor: p.tint }]}
+              onPress={() => (mapKey ? setShowSitrepModal(true) : needKey())}>
+              <Text style={[styles.chipTx, { color: p.tint }]}>SITREP</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.reportChip, { borderColor: p.tint }]}
+              onPress={() => (mapKey ? setShowAarModal(true) : needKey())}>
+              <Text style={[styles.chipTx, { color: p.tint }]}>AAR</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.reportChip, { borderColor: p.tint }]}
+              onPress={() => (mapKey ? setShowTargetModal(true) : needKey())}>
+              <Text style={[styles.chipTx, { color: p.tint }]}>Target pkg</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.reportChip, { borderColor: p.tint }]}
+              onPress={() => (mapKey ? setShowIntelModal(true) : needKey())}>
+              <Text style={[styles.chipTx, { color: p.tint }]}>Intel</Text>
+            </Pressable>
+          </View>
+        </TacticalBlock>
       </ScrollView>
 
       <SitrepModal
@@ -157,13 +159,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   missionsLinkTx: { flex: 1, fontSize: 15, fontWeight: "700" },
-  section: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-    marginBottom: 10,
-  },
   reportRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   reportChip: {
     paddingHorizontal: 16,
