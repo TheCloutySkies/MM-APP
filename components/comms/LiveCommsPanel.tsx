@@ -1,9 +1,11 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as ImagePicker from "expo-image-picker";
 import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Image,
     Modal,
     Pressable,
     ScrollView,
@@ -19,6 +21,11 @@ import type { TacticalColors } from "@/constants/TacticalTheme";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useLiveComms } from "@/hooks/useLiveComms";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
+import {
+    CHAT_IMAGE_B64_MAX,
+    encodeChatImagePayload,
+    tryParseChatImagePayload,
+} from "@/lib/comms/chatImagePayload";
 import {
     encodeVaultAttachPayload,
     tryParseVaultAttachPayload,
@@ -113,6 +120,9 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
     commsAdmin,
     retryTeamChannel,
     openDmWith,
+    backFromDm,
+    reloadChatHistory,
+    sendPriorityEmail,
     directoryPeers,
     directoryError,
     refreshChatDirectory,
@@ -127,6 +137,65 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
 
   const chatPeersOthers = directoryPeers.filter((p) => p.id !== profileId);
   const inviteCandidates = directoryPeers.filter((p) => p.id !== profileId);
+  const dmFocused = unlocked && commsMode === "dm" && activePeerId != null;
+
+  const mentionTail = (() => {
+    const m = draft.match(/@([a-zA-Z0-9._-]*)$/);
+    return m ? m[1].toLowerCase() : null;
+  })();
+  const mentionCandidates =
+    mentionTail != null
+      ? chatPeersOthers.filter((p) => p.username.toLowerCase().includes(mentionTail))
+      : [];
+
+  const insertMention = useCallback((handle: string) => {
+    const i = draft.lastIndexOf("@");
+    if (i < 0) return;
+    setDraft(`${draft.slice(0, i)}@${handle} `);
+  }, [draft]);
+
+  const pickAndSendChatImage = useCallback(async () => {
+    if (!webOk) {
+      Alert.alert("Photos", "Image uploads are available in the web team chat.");
+      return;
+    }
+    if (commsMode === "dm" && !activePeerId) {
+      Alert.alert("Chat", "Pick someone to message first.");
+      return;
+    }
+    if (commsMode === "grp" && !groupChannelReady) {
+      Alert.alert("Team chat", "Connect to the team channel before sending photos.");
+      return;
+    }
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Photos", "Allow photo access in your browser or OS settings.");
+        return;
+      }
+      const r = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.45,
+        base64: true,
+        allowsEditing: false,
+      });
+      if (r.canceled || !r.assets?.[0]) return;
+      const a = r.assets[0];
+      const b64 = a.base64;
+      if (!b64) {
+        Alert.alert("Image", "Could not read that image. Try another file.");
+        return;
+      }
+      if (b64.length > CHAT_IMAGE_B64_MAX) {
+        Alert.alert("Image too large", "Pick a smaller photo (roughly under ~300KB).");
+        return;
+      }
+      const mime = a.mimeType && a.mimeType.startsWith("image/") ? a.mimeType : "image/jpeg";
+      await sendMessageBody(encodeChatImagePayload({ v: 1, mime, b64 }));
+    } catch {
+      Alert.alert("Image", "Could not attach that photo.");
+    }
+  }, [webOk, commsMode, activePeerId, groupChannelReady, sendMessageBody]);
 
   useEffect(() => {
     if (!attachOpen || !supabase) return;
@@ -235,20 +304,57 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
           paddingBottom: variant === "sheet" ? Math.max(16, insets.bottom) : 12,
         },
       ]}>
-      <View style={styles.headRow}>
-        <View style={{ flex: 1, paddingRight: 8 }}>
-          <Text style={[styles.kicker, { color: chrome.tabIconDefault }]}>SECURE CHAN</Text>
-          <Text style={[styles.title, { color: chrome.text }]}>Team chat</Text>
-          <Text style={[styles.subHead, { color: chrome.tabIconDefault }]}>
-            Works like regular texting. Your vault PIN protects this browser’s copy of your keys.
-          </Text>
-        </View>
-        {variant === "sheet" && onCloseSheet ? (
-          <Pressable onPress={onCloseSheet} hitSlop={12} accessibilityRole="button">
-            <FontAwesome name="times" size={22} color={chrome.tint} />
+      {unlocked && dmFocused ? (
+        <View style={[styles.headRow, { alignItems: "center" }]}>
+          <Pressable onPress={backFromDm} hitSlop={14} accessibilityRole="button" accessibilityLabel="Back to team chat">
+            <FontAwesome name="chevron-left" size={20} color={chrome.tint} />
           </Pressable>
-        ) : null}
-      </View>
+          <View style={{ flex: 1, paddingHorizontal: 10 }}>
+            <Text style={[styles.kicker, { color: chrome.tabIconDefault }]}>DIRECT</Text>
+            <Text style={[styles.title, { color: chrome.text }]} numberOfLines={1}>
+              {activePeerId ? usernameForPeerId(activePeerId) : ""}
+            </Text>
+            <Text style={[styles.subHead, { color: chrome.tabIconDefault }]}>
+              Private thread — history reloads from the server on open.
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => void reloadChatHistory()}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Reload messages from server">
+            <FontAwesome name="history" size={18} color={chrome.tabIconDefault} />
+          </Pressable>
+          <Pressable
+            onPress={() => setVerifyOpen(true)}
+            hitSlop={10}
+            style={{ marginLeft: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Verify security words">
+            <FontAwesome name="shield" size={18} color={chrome.tint} />
+          </Pressable>
+          {variant === "sheet" && onCloseSheet ? (
+            <Pressable onPress={onCloseSheet} hitSlop={12} style={{ marginLeft: 8 }} accessibilityRole="button">
+              <FontAwesome name="times" size={22} color={chrome.tint} />
+            </Pressable>
+          ) : null}
+        </View>
+      ) : (
+        <View style={styles.headRow}>
+          <View style={{ flex: 1, paddingRight: 8 }}>
+            <Text style={[styles.kicker, { color: chrome.tabIconDefault }]}>SECURE CHAN</Text>
+            <Text style={[styles.title, { color: chrome.text }]}>Team chat</Text>
+            <Text style={[styles.subHead, { color: chrome.tabIconDefault }]}>
+              Works like regular texting. Your vault PIN protects this browser’s copy of your keys.
+            </Text>
+          </View>
+          {variant === "sheet" && onCloseSheet ? (
+            <Pressable onPress={onCloseSheet} hitSlop={12} accessibilityRole="button">
+              <FontAwesome name="times" size={22} color={chrome.tint} />
+            </Pressable>
+          ) : null}
+        </View>
+      )}
 
       {!hasIdentityDevice ? (
         <ScrollView style={styles.setupScroll} keyboardShouldPersistTaps="handled">
@@ -334,20 +440,22 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
             </View>
           ) : null}
 
-          <View style={styles.actionRow}>
-            <Pressable
-              style={[styles.newMsgBtn, { backgroundColor: chrome.tint }]}
-              onPress={() => {
-                void refreshChatDirectory();
-                setNewChatOpen(true);
-              }}
-              accessibilityRole="button">
-              <FontAwesome name="plus" size={14} color={TacticalPalette.matteBlack} />
-              <Text style={[styles.newMsgBtnTx, { color: TacticalPalette.matteBlack }]}>New message</Text>
-            </Pressable>
-          </View>
+          {!dmFocused ? (
+            <View style={styles.actionRow}>
+              <Pressable
+                style={[styles.newMsgBtn, { backgroundColor: chrome.tint }]}
+                onPress={() => {
+                  void refreshChatDirectory();
+                  setNewChatOpen(true);
+                }}
+                accessibilityRole="button">
+                <FontAwesome name="plus" size={14} color={TacticalPalette.matteBlack} />
+                <Text style={[styles.newMsgBtnTx, { color: TacticalPalette.matteBlack }]}>New message</Text>
+              </Pressable>
+            </View>
+          ) : null}
 
-          {commsMode === "grp" && !groupChannelReady ? (
+          {!dmFocused && commsMode === "grp" && !groupChannelReady ? (
             <View style={[styles.banner, { borderColor: chrome.tint, backgroundColor: "rgba(107,142,92,0.12)" }]}>
               <Text style={[styles.bannerTx, { color: chrome.text }]}>
                 Connecting to the team channel… If this stays a while, your organizer may still be adding you.
@@ -360,12 +468,14 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
             </View>
           ) : null}
 
-          <View style={styles.modeRow}>
-            <ModeChip label="Team" active={commsMode === "grp"} onPress={() => setCommsMode("grp")} />
-            <ModeChip label="Direct" active={commsMode === "dm"} onPress={() => setCommsMode("dm")} />
-          </View>
+          {!dmFocused ? (
+            <View style={styles.modeRow}>
+              <ModeChip label="Team" active={commsMode === "grp"} onPress={() => setCommsMode("grp")} />
+              <ModeChip label="Direct" active={commsMode === "dm"} onPress={() => setCommsMode("dm")} />
+            </View>
+          ) : null}
 
-          {commsMode === "dm" ? (
+          {!dmFocused && commsMode === "dm" ? (
             <View style={styles.dmSetup}>
               {activePeerId ? (
                 <View style={styles.dmHead}>
@@ -412,24 +522,26 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
                 </Pressable>
               )}
             </View>
-          ) : (
+          ) : !dmFocused ? (
             <View style={styles.grpHint}>
               <Text style={[styles.hintSm, { color: chrome.tabIconDefault }]}>
                 Group thread for everyone on the team channel. Messages are encrypted on your device before they go out.
               </Text>
             </View>
-          )}
+          ) : null}
 
-          <Pressable
-            onPress={() => setShowAdvanced((x) => !x)}
-            style={styles.advancedToggle}
-            accessibilityRole="button">
-            <Text style={{ color: chrome.tabIconDefault, fontSize: 12, fontWeight: "700" }}>
-              {showAdvanced ? "▼" : "▶"} Admin & troubleshooting
-            </Text>
-          </Pressable>
+          {!dmFocused ? (
+            <>
+              <Pressable
+                onPress={() => setShowAdvanced((x) => !x)}
+                style={styles.advancedToggle}
+                accessibilityRole="button">
+                <Text style={{ color: chrome.tabIconDefault, fontSize: 12, fontWeight: "700" }}>
+                  {showAdvanced ? "▼" : "▶"} Admin & troubleshooting
+                </Text>
+              </Pressable>
 
-          {showAdvanced ? (
+              {showAdvanced ? (
             <View style={styles.advancedBox}>
               <Text style={[styles.hintSm, { color: chrome.tabIconDefault, marginBottom: 8 }]}>
                 {commsAdmin
@@ -476,6 +588,8 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
                 </>
               ) : null}
             </View>
+              ) : null}
+            </>
           ) : null}
 
           {status ? (
@@ -484,7 +598,7 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
             </Text>
           ) : null}
 
-          {channelRoster.length ? (
+          {!dmFocused && channelRoster.length ? (
             <View style={styles.rosterBlock}>
               <Text style={[styles.rosterLabel, { color: chrome.tabIconDefault }]}>
                 Active on team chat — tap to message privately
@@ -510,10 +624,25 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
             </View>
           ) : null}
 
+          {mentionCandidates.length > 0 && mentionTail != null ? (
+            <View style={styles.mentionBar}>
+              <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false}>
+                {mentionCandidates.map((p) => (
+                  <Pressable
+                    key={p.id}
+                    onPress={() => insertMention(p.username)}
+                    style={[styles.mentionChip, { borderColor: TacticalPalette.border }]}>
+                    <Text style={{ color: chrome.text, fontWeight: "700", fontSize: 12 }}>@{p.username}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
           <FlatList
             ref={listRef}
             data={messages}
-            keyExtractor={(m) => m.clientMsgId}
+            keyExtractor={(m) => `${m.clientMsgId || m.id}|${m.ts}`}
             style={styles.msgList}
             contentContainerStyle={styles.msgListInner}
             renderItem={({ item }) => (
@@ -553,6 +682,13 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
               accessibilityLabel="Attach vault file">
               <FontAwesome name="paperclip" size={18} color={chrome.tint} />
             </Pressable>
+            <Pressable
+              style={[styles.attachBtn, { borderColor: TacticalPalette.border }]}
+              onPress={() => void pickAndSendChatImage()}
+              accessibilityRole="button"
+              accessibilityLabel="Attach photo from device">
+              <FontAwesome name="picture-o" size={18} color={chrome.tint} />
+            </Pressable>
             <TextInput
               placeholder={
                 commsMode === "grp" ? "Message the team…" : activePeerId ? "Message…" : "Pick someone to message…"
@@ -563,6 +699,36 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
               multiline
               style={[styles.composerInput, { color: chrome.text, borderColor: TacticalPalette.border }]}
             />
+            {dmFocused && activePeerId ? (
+              <Pressable
+                style={[styles.attachBtn, { borderColor: TacticalPalette.coyote }]}
+                onPress={() => {
+                  const excerpt =
+                    draft.trim() ||
+                    `Priority note from ${username ?? "MM user"} — please open encrypted team chat when you can.`;
+                  Alert.alert(
+                    "Priority email",
+                    `Send a high-visibility email to ${usernameForPeerId(activePeerId)}? They must use the email on their MM account. Requires Resend on the server.`,
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Send email",
+                        style: "default",
+                        onPress: () =>
+                          void (async () => {
+                            const r = await sendPriorityEmail(activePeerId, excerpt);
+                            if (r.ok) Alert.alert("Queued", "Priority email sent.");
+                            else Alert.alert("Not sent", r.message);
+                          })(),
+                      },
+                    ],
+                  );
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Send priority email">
+                <FontAwesome name="envelope" size={17} color={TacticalPalette.coyote} />
+              </Pressable>
+            ) : null}
             <Pressable
               style={[styles.sendFab, { backgroundColor: chrome.tint }]}
               onPress={onSend}
@@ -576,7 +742,8 @@ export function LiveCommsPanel({ variant, onCloseSheet }: Props) {
               <Pressable style={[styles.modalCard, { borderColor: TacticalPalette.border }]} onPress={(e) => e.stopPropagation()}>
                 <Text style={[styles.modalTitle, { color: chrome.text }]}>New message</Text>
                 <Text style={[styles.hintSm, { color: chrome.tabIconDefault, marginBottom: 12 }]}>
-                  Choose a teammate. Encryption runs automatically.
+                  Only teammates who finished web Team chat setup appear here (encrypted identity). Tap a name to open a
+                  private thread.
                 </Text>
                 <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
                   {directoryError ? (
@@ -754,6 +921,7 @@ function MessageBubble({
   const mine = item.mine;
   const who = mine ? selfName : resolveName(item.fromId);
   const t = new Date(item.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const chatImg = tryParseChatImagePayload(item.plaintext);
   const attach = tryParseVaultAttachPayload(item.plaintext);
   const delivery = item.deliveryStatus;
   const showDelivery = mine && (delivery === "queued" || delivery === "pending" || delivery === "sent" || delivery === undefined);
@@ -785,7 +953,14 @@ function MessageBubble({
             />
           ) : null}
         </View>
-        {attach ? (
+        {chatImg ? (
+          <Image
+            source={{ uri: `data:${chatImg.mime};base64,${chatImg.b64}` }}
+            style={styles.chatImage}
+            resizeMode="cover"
+            accessibilityLabel="Chat photo"
+          />
+        ) : attach ? (
           <Pressable
             onPress={() => onOpenVaultAttachment(attach, item.fromId)}
             style={[styles.attachCard, { borderColor: TacticalPalette.border }]}>
@@ -905,6 +1080,15 @@ const styles = StyleSheet.create({
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1 },
   chipTx: { fontSize: 13, fontWeight: "800" },
   dmSetup: { paddingHorizontal: 14, gap: 8, marginBottom: 8 },
+  mentionBar: { paddingHorizontal: 12, paddingBottom: 6, maxHeight: 48 },
+  mentionChip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginRight: 8,
+    backgroundColor: "rgba(40,48,38,0.55)",
+  },
   rosterBlock: { paddingHorizontal: 14, marginBottom: 8, gap: 6 },
   rosterLabel: { fontSize: 10, fontWeight: "700", letterSpacing: 0.4 },
   rosterScroll: { flexDirection: "row", gap: 6, paddingVertical: 2 },
@@ -966,6 +1150,14 @@ const styles = StyleSheet.create({
   attachTitle: { fontSize: 13, fontWeight: "800" },
   attachSub: { fontSize: 13, marginTop: 2 },
   attachHint: { fontSize: 11, marginTop: 6, fontStyle: "italic" },
+  chatImage: {
+    width: "100%",
+    maxWidth: 280,
+    height: 200,
+    borderRadius: 10,
+    marginTop: 4,
+    backgroundColor: "rgba(0,0,0,0.2)",
+  },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",

@@ -5,7 +5,7 @@
 import type { Feature, FeatureCollection } from "geojson";
 import * as turf from "@turf/turf";
 import type { Layer, LeafletMouseEvent, Map as LeafletMap, Polyline } from "leaflet";
-import L from "leaflet";
+import * as L from "leaflet";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,

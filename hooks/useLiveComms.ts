@@ -394,7 +394,7 @@ export function useLiveComms() {
         .select("*")
         .eq("group_id", GLOBAL_GROUP_ID)
         .order("created_at", { ascending: true })
-        .limit(400);
+        .limit(800);
       for (const row of data ?? []) {
         await applyEnvelopeRow(row as E2eeEnvelopeRow);
       }
@@ -425,14 +425,14 @@ export function useLiveComms() {
       .eq("sender_id", activePeerId)
       .eq("recipient_id", profileId)
       .order("created_at", { ascending: true })
-      .limit(400);
+      .limit(800);
     const { data: b } = await supabase
       .from("e2ee_comms_envelopes")
       .select("*")
       .eq("sender_id", profileId)
       .eq("recipient_id", activePeerId)
       .order("created_at", { ascending: true })
-      .limit(400);
+      .limit(800);
     const merged = [...(a ?? []), ...(b ?? [])].sort(
       (x, y) => new Date(x.created_at).getTime() - new Date(y.created_at).getTime(),
     );
@@ -755,12 +755,51 @@ export function useLiveComms() {
     setPeerInput("");
   }, [peerInput]);
 
-  const openDmWith = useCallback((peerId: string) => {
-    if (!peerId || peerId === profileId) return;
-    setActivePeerId(peerId);
-    setCommsMode("dm");
+  const openDmWith = useCallback(
+    (peerId: string) => {
+      if (!peerId || peerId === profileId) return;
+      setActivePeerId(peerId);
+      setCommsMode("dm");
+      setStatus(null);
+      void (async () => {
+        if (!supabase || !profileId) return;
+        const { spki, error } = await fetchPeerPublicSpki(supabase, peerId);
+        if (!error && spki) {
+          await markDmVerified(profileId, peerId, spki);
+          setDmTrustVisual("ok");
+        }
+      })();
+    },
+    [profileId, supabase],
+  );
+
+  const backFromDm = useCallback(() => {
+    setActivePeerId(null);
     setStatus(null);
-  }, [profileId]);
+    setCommsMode("grp");
+  }, []);
+
+  const reloadChatHistory = useCallback(() => {
+    void loadHistory();
+  }, [loadHistory]);
+
+  const sendPriorityEmail = useCallback(
+    async (targetProfileId: string, excerpt: string) => {
+      if (!supabase) return { ok: false as const, message: "Not connected" };
+      const { error } = await supabase.functions.invoke("mm-priority-email", {
+        body: { target_profile_id: targetProfileId, excerpt: excerpt.trim().slice(0, 2000) },
+      });
+      if (error) {
+        const msg =
+          typeof error.message === "string" && error.message
+            ? error.message
+            : "Couldn’t send priority email (check Resend / function logs).";
+        return { ok: false as const, message: msg };
+      }
+      return { ok: true as const };
+    },
+    [supabase],
+  );
 
   const buildVerifyPhraseForPeer = useCallback(
     async (peerId: string): Promise<string | null> => {
@@ -1018,6 +1057,9 @@ export function useLiveComms() {
     commsAdmin,
     retryTeamChannel,
     openDmWith,
+    backFromDm,
+    reloadChatHistory,
+    sendPriorityEmail,
     directoryPeers,
     directoryError,
     refreshChatDirectory: loadDirectory,

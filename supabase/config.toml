@@ -9,3 +9,6 @@ verify_jwt = false
 
 [functions.send-decoy-alert]
 verify_jwt = true
+
+[functions.mm-priority-email]
+verify_jwt = true
