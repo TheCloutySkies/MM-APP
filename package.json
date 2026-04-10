@@ -50,6 +50,7 @@
     "piexifjs": "^1.0.6",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "react-dropzone": "^14.4.1",
     "react-native": "0.81.5",
     "react-native-maps": "1.20.1",
     "react-native-reanimated": "~4.1.1",

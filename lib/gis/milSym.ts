@@ -1,4 +1,10 @@
-import { Symbol as MilSymbol } from "milsymbol";
+import mil from "milsymbol";
+
+/**
+ * milsymbol exposes the class as `default.Symbol`. A named `{ Symbol }` import breaks on Hermes /
+ * Metro because it resolves to the built-in `Symbol` instead of the library constructor.
+ */
+const MilSymbol = mil.Symbol;
 
 export type TacticalAffiliation = "friendly" | "hostile" | "neutral" | "unknown";
 export type TacticalUnitType = "infantry" | "medical" | "supply" | "vehicle" | "cache" | "unknown";

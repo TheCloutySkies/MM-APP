@@ -2,10 +2,12 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
+    ActivityIndicator,
     Alert,
     FlatList,
+    Image,
     Modal,
     Platform,
     Pressable,
@@ -15,16 +17,19 @@ import {
     TextInput,
     View,
     useColorScheme,
-    useWindowDimensions,
 } from "react-native";
 
 import { PanicButton } from "@/components/PanicButton";
+import { VaultDriveBreadcrumbs, type VaultCrumb } from "@/components/vault/VaultDriveBreadcrumbs";
+import { VaultDriveSidebar, type VaultDriveNav } from "@/components/vault/VaultDriveSidebar";
+import { VaultFullBleedDropzone } from "@/components/vault/VaultFullBleedDropzone";
+import { VaultLightbox, type VaultLightboxEntry, type VaultLightboxRow } from "@/components/vault/VaultLightbox";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useActivityLogger } from "@/hooks/useActivityLogger";
-import { aes256GcmDecrypt, aes256GcmEncrypt, decryptUtf8, encryptUtf8, type AeadBundle } from "@/lib/crypto/aesGcm";
+import { aes256GcmDecrypt, decryptUtf8, encryptUtf8, type AeadBundle } from "@/lib/crypto/aesGcm";
 import { utf8, utf8decode } from "@/lib/crypto/bytes";
-import { runCloutVisionPipeline } from "@/lib/media/cloutVision";
+import { loadVaultOutbox, type VaultOutboxRecord } from "@/lib/e2ee/localStore";
 import {
     loadVaultOpsSnapshot,
     loadVaultPrivateSnapshot,
@@ -54,6 +59,12 @@ import {
     type SpotrepPayloadV1,
     type TargetPackagePayloadV1,
 } from "@/lib/opsReports";
+import { insertVaultFolder } from "@/lib/vault/createVaultFolder";
+import { getPrivateItemMime } from "@/lib/vault/smartFolder";
+import { isRasterImageMime, rasterFileToJpegDataUrlPreview120, rasterFileToWebPThumbnail200 } from "@/lib/vault/thumbnailWeb";
+import type { VaultMetaPlainV1, VaultPartition } from "@/lib/vault/vaultConstants";
+import { decryptVaultMetaJson, decryptVaultThumbnailToObjectUrl, reencryptVaultMetaWithFilename } from "@/lib/vault/vaultMetaDecrypt";
+import { runVaultUpload } from "@/lib/vault/vaultUpload";
 import {
     formatOpsVaultHeadline,
     formatVaultListDate,
@@ -61,7 +72,66 @@ import {
 } from "@/lib/vaultNaming";
 import { resolveMapEncryptKey, useMMStore } from "@/store/mmStore";
 
-type VaultObjectRow = { id: string; storage_path: string; created_at: string; folder_id: string | null };
+type VaultMetadataRow = {
+  encrypted_meta: string;
+  encrypted_thumbnail: string | null;
+  is_folder?: boolean;
+  parent_id?: string | null;
+  trashed_at?: string | null;
+};
+
+type VaultObjectRow = {
+  id: string;
+  storage_path: string | null;
+  vault_partition?: string | null;
+  created_at: string;
+  folder_id: string | null;
+  vault_metadata?: VaultMetadataRow | VaultMetadataRow[] | null;
+};
+
+type PrivateListItem =
+  | { kind: "remote"; row: VaultObjectRow }
+  | { kind: "queued"; rec: VaultOutboxRecord };
+
+type UploadingRow = {
+  kind: "uploading";
+  uploadId: string;
+  name: string;
+  mime: string;
+  pct: number;
+  label: string;
+  parentVaultObjectId: string | null;
+};
+
+type DriveRow = PrivateListItem | UploadingRow;
+
+function pickVaultMetaRow(row: VaultObjectRow): VaultMetadataRow | null {
+  const raw = row.vault_metadata;
+  if (!raw) return null;
+  const m = Array.isArray(raw) ? raw[0] : raw;
+  if (!m || !m.encrypted_meta) return null;
+  return m;
+}
+
+function vaultMetaDbFields(m: VaultMetadataRow | null): {
+  isFolder: boolean;
+  parentId: string | null;
+  trashedAt: string | null;
+} {
+  if (!m) return { isFolder: false, parentId: null, trashedAt: null };
+  return {
+    isFolder: m.is_folder === true,
+    parentId: m.parent_id ?? null,
+    trashedAt: m.trashed_at ?? null,
+  };
+}
+
+function rowVaultPartition(r: VaultObjectRow, fallback: string): string {
+  if (r.vault_partition === "main" || r.vault_partition === "decoy") return r.vault_partition;
+  const p = r.storage_path?.split("/")[1];
+  if (p === "main" || p === "decoy") return p;
+  return fallback;
+}
 
 type VaultFolderRow = { id: string; parent_id: string | null; encrypted_name: string; created_by: string };
 
@@ -88,7 +158,7 @@ function useActiveVaultKey() {
 function sectionTitle(s: VaultSection): string {
   switch (s) {
     case "private":
-      return "My drive";
+      return "Team drive";
     case "mission_plan":
       return "Mission plans";
     case "sitrep":
@@ -110,41 +180,22 @@ function sectionTitle(s: VaultSection): string {
   }
 }
 
-function sectionIcon(s: VaultSection): ComponentProps<typeof FontAwesome>["name"] {
-  switch (s) {
-    case "private":
-      return "folder";
-    case "mission_plan":
-      return "crosshairs";
-    case "sitrep":
-      return "rss";
-    case "aar":
-      return "clipboard";
-    case "target_package":
-      return "crosshairs";
-    case "intel_report":
-      return "eye";
-    case "spotrep":
-      return "binoculars";
-    case "medevac_nine_line":
-      return "ambulance";
-    case "route_recon":
-      return "road";
-    default:
-      return "file";
-  }
-}
+/** Ops kinds shown as team “folders” in the unified drive sidebar. */
+const OPS_DRIVE_FOLDERS: { id: OpsDocKind; label: string }[] = [
+  { id: "mission_plan", label: "Mission plans" },
+  { id: "sitrep", label: "SITREPs" },
+  { id: "aar", label: "After action" },
+  { id: "target_package", label: "Target packages" },
+  { id: "intel_report", label: "Intel reports" },
+  { id: "spotrep", label: "SPOTREPs" },
+  { id: "medevac_nine_line", label: "9-line MEDEVAC" },
+  { id: "route_recon", label: "Route recon" },
+];
 
 export default function VaultScreen() {
   const router = useRouter();
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
-  const { width: windowW } = useWindowDimensions();
-  const isWideLayout = windowW >= 720;
-  /** Wide desktop only: user can collapse the 200px labeled rail to a 56px icon rail. */
-  const [driveSidebarMinimized, setDriveSidebarMinimized] = useState(false);
-  const sidebarLabelsVisible = isWideLayout && !driveSidebarMinimized;
-  const driveSidebarWidth = sidebarLabelsVisible ? 200 : 56;
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const vaultMode = useMMStore((s) => s.vaultMode);
@@ -169,7 +220,15 @@ export default function VaultScreen() {
   const [rows, setRows] = useState<VaultObjectRow[]>([]);
   const [folders, setFolders] = useState<VaultFolderRow[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [newFolderName, setNewFolderName] = useState("");
+  /** Hierarchical vault folders: `vault_objects.id` of the open folder, or null at Team drive root. */
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [driveNav, setDriveNav] = useState<VaultDriveNav>("my");
+  const [newFolderModalOpen, setNewFolderModalOpen] = useState(false);
+  const [newFolderDraft, setNewFolderDraft] = useState("");
+  const [renameTarget, setRenameTarget] = useState<VaultObjectRow | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [moveTarget, setMoveTarget] = useState<VaultObjectRow | null>(null);
+  const [moreMenuRow, setMoreMenuRow] = useState<VaultObjectRow | null>(null);
   const [opsRows, setOpsRows] = useState<OpsReportRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -179,8 +238,23 @@ export default function VaultScreen() {
   const [vaultFromCache, setVaultFromCache] = useState(false);
   const viewMode = useMMStore((s) => s.vaultDriveViewMode);
   const setVaultDriveViewMode = useMMStore((s) => s.setVaultDriveViewMode);
+  const [vaultQueued, setVaultQueued] = useState<VaultOutboxRecord[]>([]);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadingRows, setUploadingRows] = useState<UploadingRow[]>([]);
+  const [thumbUrlById, setThumbUrlById] = useState<Record<string, string>>({});
+  const [lightbox, setLightbox] = useState<{ entries: VaultLightboxEntry[]; index: number } | null>(null);
+  const lastActivateRef = useRef<{ id: string; t: number }>({ id: "", t: 0 });
 
+  const partition = (vaultMode === "decoy" ? "decoy" : "main") as VaultPartition;
   const prefix = vaultMode ?? "main";
+
+  const reloadQueued = useCallback(async () => {
+    if (Platform.OS !== "web") {
+      setVaultQueued([]);
+      return;
+    }
+    setVaultQueued(await loadVaultOutbox());
+  }, []);
 
   const refreshFolders = useCallback(async (): Promise<VaultFolderRow[]> => {
     if (!supabase) return [];
@@ -213,7 +287,9 @@ export default function VaultScreen() {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("vault_objects")
-      .select("id, storage_path, created_at, folder_id")
+      .select(
+        "id, storage_path, created_at, folder_id, vault_partition, vault_metadata (encrypted_meta, encrypted_thumbnail, is_folder, parent_id, trashed_at)",
+      )
       .order("created_at", { ascending: false });
     if (error) {
       Alert.alert("Vault list", error.message);
@@ -246,30 +322,6 @@ export default function VaultScreen() {
     }
     Alert.alert("Drive", `Created encrypted folder “${label}” in the current location.`);
     setTeamHubOpen(false);
-    void refreshPrivate();
-  };
-
-  const createFolder = async () => {
-    if (!supabase || !profileId || !mapKey || mapKey.length !== 32) {
-      Alert.alert("Folders", "Unlock main vault to encrypt folder names.");
-      return;
-    }
-    const label = newFolderName.trim();
-    if (!label) {
-      Alert.alert("Folders", "Enter a folder name.");
-      return;
-    }
-    const enc = encryptUtf8(mapKey, label, VAULT_FOLDER_NAME_AAD);
-    const { error } = await supabase.from("vault_folders").insert({
-      parent_id: selectedFolderId,
-      encrypted_name: enc,
-      created_by: profileId,
-    });
-    if (error) {
-      Alert.alert("Folders", error.message);
-      return;
-    }
-    setNewFolderName("");
     void refreshPrivate();
   };
 
@@ -316,45 +368,160 @@ export default function VaultScreen() {
   useFocusEffect(
     useCallback(() => {
       void refresh();
+      void reloadQueued();
       if (vaultMode === "main") void touchRealUnlock();
-    }, [refresh, touchRealUnlock, vaultMode]),
+    }, [refresh, reloadQueued, touchRealUnlock, vaultMode]),
   );
 
-  const uploadBytes = async (raw: Uint8Array, mimeHint?: string) => {
-    if (Platform.OS === "web" && !isWebOnline()) {
-      Alert.alert("Offline", "Reconnect to upload encrypted files to your vault.");
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const up = () => {
+      void reloadQueued();
+      void refreshPrivate();
+    };
+    window.addEventListener("online", up);
+    return () => window.removeEventListener("online", up);
+  }, [reloadQueued, refreshPrivate]);
+
+  useEffect(() => {
+    if (!key || key.length !== 32) {
+      setThumbUrlById((prev) => {
+        Object.values(prev).forEach((u) => {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {
+            /* ignore */
+          }
+        });
+        return {};
+      });
       return;
     }
-    if (!supabase || !profileId || !key || key.length !== 32) {
-      Alert.alert("Vault", "Not ready.");
-      return;
+    const next: Record<string, string> = {};
+    for (const r of rows) {
+      const meta = pickVaultMetaRow(r);
+      const encT = meta?.encrypted_thumbnail;
+      if (!encT) continue;
+      const u = decryptVaultThumbnailToObjectUrl(key, encT, partition);
+      if (u) next[r.id] = u;
     }
-    const scrubbed = runCloutVisionPipeline(raw, mimeHint);
-    const bundle = aes256GcmEncrypt(key, scrubbed, utf8(`mm-vault/${prefix}`));
-    const body = JSON.stringify(bundle);
-    const enc = new TextEncoder().encode(body);
-    const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`;
-    const path = `${profileId}/${prefix}/${id}.enc`;
-    const { error: upErr } = await supabase.storage.from("vault").upload(path, enc, {
-      contentType: "application/octet-stream",
-      upsert: false,
+    setThumbUrlById((prev) => {
+      Object.values(prev).forEach((u) => {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {
+          /* ignore */
+        }
+      });
+      return next;
     });
-    if (upErr) {
-      Alert.alert("Upload", upErr.message);
+    return () => {
+      Object.values(next).forEach((u) => {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {
+          /* ignore */
+        }
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuild thumbs when rows/key/partition change
+  }, [rows, key, partition]);
+
+  const remoteMetaById = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof decryptVaultMetaJson>>();
+    if (!key || key.length !== 32) return m;
+    for (const r of rows) {
+      const meta = pickVaultMetaRow(r);
+      if (!meta?.encrypted_meta) continue;
+      const parsed = decryptVaultMetaJson(key, meta.encrypted_meta, partition);
+      if (parsed) m.set(r.id, parsed);
+    }
+    return m;
+  }, [rows, key, partition]);
+
+  const formatBytes = (n: number) => {
+    if (!Number.isFinite(n) || n <= 0) return "0 B";
+    const u = ["B", "KB", "MB", "GB"];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < u.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+  };
+
+  const uploadVaultFiles = async (files: { bytes: Uint8Array; name: string; mime?: string; file?: File }[]) => {
+    if (!supabase || !profileId || !key || key.length !== 32) {
+      Alert.alert("Vault", "Unlock your Vault to add files.");
       return;
     }
-    const { data: ins, error: rowErr } = await supabase
-      .from("vault_objects")
-      .insert({
-        owner_id: profileId,
-        storage_path: path,
-        folder_id: section === "private" ? selectedFolderId : null,
-      })
-      .select("id")
-      .single();
-    if (rowErr) Alert.alert("Vault row", rowErr.message);
-    else if (ins?.id) void logAction("VAULT_FILE", ins.id as string);
-    void refreshPrivate();
+    if (Platform.OS !== "web" && !isWebOnline()) {
+      Alert.alert("You're offline", "Reconnect to add files to your Vault.");
+      return;
+    }
+    setUploadBusy(true);
+    try {
+      for (const f of files) {
+        const mime = f.mime ?? "application/octet-stream";
+        const uploadId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const parentForUpload = section === "private" && driveNav === "my" ? currentFolderId : null;
+        setUploadingRows((prev) => [
+          ...prev,
+          {
+            kind: "uploading",
+            uploadId,
+            name: f.name,
+            mime,
+            pct: 0,
+            label: "Starting…",
+            parentVaultObjectId: parentForUpload,
+          },
+        ]);
+        let thumb: Uint8Array | null | undefined;
+        let previewUrl: string | null | undefined;
+        if (Platform.OS === "web" && f.file && isRasterImageMime(mime)) {
+          thumb = await rasterFileToWebPThumbnail200(f.file);
+          previewUrl = await rasterFileToJpegDataUrlPreview120(f.file);
+        }
+        const res = await runVaultUpload(
+          {
+            supabase,
+            profileId,
+            vaultKey: key,
+            partition,
+            parentVaultObjectId: section === "private" && driveNav === "my" ? currentFolderId : null,
+            allowOfflineQueue: Platform.OS === "web",
+            onProgress: (prog) => {
+              setUploadingRows((prev) =>
+                prev.map((r) => (r.uploadId === uploadId ? { ...r, pct: prog.pct, label: prog.label } : r)),
+              );
+            },
+          },
+          {
+            filename: f.name,
+            mimeType: mime,
+            bytes: f.bytes,
+            thumbnailWebp: thumb ?? null,
+            localPreviewDataUrl: previewUrl ?? null,
+          },
+        );
+        setUploadingRows((prev) => prev.filter((r) => r.uploadId !== uploadId));
+        if (!res.ok) {
+          Alert.alert("Couldn't add this file", res.error);
+          break;
+        }
+        if (res.ok && !res.queued) void logAction("VAULT_FILE", res.objectId);
+      }
+      await reloadQueued();
+      void refreshPrivate();
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
+  const uploadBytes = async (raw: Uint8Array, name: string, mimeHint?: string, pickedFile?: File) => {
+    await uploadVaultFiles([{ bytes: raw, name, mime: mimeHint, file: pickedFile }]);
   };
 
   const pickDoc = async () => {
@@ -363,7 +530,12 @@ export default function VaultScreen() {
     const u = r.assets[0];
     const res = await fetch(u.uri);
     const buf = new Uint8Array(await res.arrayBuffer());
-    await uploadBytes(buf, u.mimeType ?? undefined);
+    const webFile =
+      Platform.OS === "web" && u && typeof u === "object" && "file" in u
+        ? (u as { file?: File }).file
+        : undefined;
+    const name = u.name?.trim() ? u.name : "upload";
+    await uploadBytes(buf, name, u.mimeType ?? undefined, webFile);
   };
 
   const pickPhoto = async () => {
@@ -374,76 +546,108 @@ export default function VaultScreen() {
     const u = r.assets[0];
     const res = await fetch(u.uri);
     const buf = new Uint8Array(await res.arrayBuffer());
-    await uploadBytes(buf, u.mimeType ?? "image/jpeg");
+    const webFile =
+      Platform.OS === "web" && u && typeof u === "object" && "file" in u
+        ? (u as { file?: File }).file
+        : undefined;
+    const name = (u.fileName && u.fileName.trim()) || "photo.jpg";
+    await uploadBytes(buf, name, u.mimeType ?? "image/jpeg", webFile);
   };
 
-  const deletePrivateVaultObject = async (row: VaultObjectRow) => {
-    if (!supabase) return;
-    const { error: stErr } = await supabase.storage.from("vault").remove([row.storage_path]);
-    if (stErr) {
-      Alert.alert("Storage", stErr.message);
-      return;
-    }
-    const { error: dbErr } = await supabase.from("vault_objects").delete().eq("id", row.id);
-    if (dbErr) {
-      Alert.alert("Vault", dbErr.message);
-      return;
-    }
-    void refreshPrivate();
-  };
+  const deletePrivateVaultObject = useCallback(
+    async (row: VaultObjectRow) => {
+      if (!supabase) return;
 
-  const openPrivateRow = async (row: VaultObjectRow) => {
-    if (Platform.OS === "web" && !isWebOnline()) {
-      Alert.alert(
-        "Offline",
-        "Encrypted files live in cloud storage. Reconnect to download and decrypt this object.",
-      );
-      return;
-    }
-    if (!supabase || !key || key.length !== 32) return;
-    setLoading(true);
-    try {
-      const { data: file, error } = await supabase.storage.from("vault").download(row.storage_path);
-      if (error || !file) {
-        Alert.alert("Download", error?.message ?? "Failed");
+      const delRecursive = async (id: string, snapshot: VaultObjectRow[]): Promise<boolean> => {
+        const kids = snapshot.filter((r) => (pickVaultMetaRow(r)?.parent_id ?? null) === id);
+        for (const k of kids) {
+          const ok = await delRecursive(k.id, snapshot);
+          if (!ok) return false;
+        }
+        const r = snapshot.find((x) => x.id === id);
+        if (!r) return true;
+        if (r.storage_path) {
+          const { error: stErr } = await supabase.storage.from("vault").remove([r.storage_path]);
+          if (stErr) {
+            Alert.alert("Storage", stErr.message);
+            return false;
+          }
+        }
+        const { error: dbErr } = await supabase.from("vault_objects").delete().eq("id", id);
+        if (dbErr) {
+          Alert.alert("Vault", dbErr.message);
+          return false;
+        }
+        return true;
+      };
+
+      const ok = await delRecursive(row.id, rows);
+      if (ok) void refreshPrivate();
+    },
+    [supabase, rows, refreshPrivate],
+  );
+
+  const softTrashVaultObject = useCallback(
+    async (row: VaultObjectRow) => {
+      if (!supabase) return;
+      const { error } = await supabase
+        .from("vault_metadata")
+        .update({ trashed_at: new Date().toISOString() })
+        .eq("vault_object_id", row.id);
+      if (error) Alert.alert("Vault", error.message);
+      else void refreshPrivate();
+    },
+    [supabase, refreshPrivate],
+  );
+
+  const restoreVaultObject = useCallback(
+    async (row: VaultObjectRow) => {
+      if (!supabase) return;
+      const { error } = await supabase.from("vault_metadata").update({ trashed_at: null }).eq("vault_object_id", row.id);
+      if (error) Alert.alert("Vault", error.message);
+      else void refreshPrivate();
+    },
+    [supabase, refreshPrivate],
+  );
+
+  const moveVaultObject = useCallback(
+    async (row: VaultObjectRow, nextParentId: string | null) => {
+      if (!supabase) return;
+      if (nextParentId === row.id) return;
+      if (nextParentId) {
+        let cur: string | null = nextParentId;
+        while (cur) {
+          if (cur === row.id) {
+            Alert.alert("Vault", "You can’t move a folder inside itself.");
+            return;
+          }
+          const parentRow = rows.find((x) => x.id === cur);
+          cur = parentRow ? (pickVaultMetaRow(parentRow)?.parent_id ?? null) : null;
+        }
+      }
+      const { error } = await supabase.from("vault_metadata").update({ parent_id: nextParentId }).eq("vault_object_id", row.id);
+      if (error) Alert.alert("Vault", error.message);
+      else void refreshPrivate();
+    },
+    [supabase, rows, refreshPrivate],
+  );
+
+  const applyRenameVaultObject = useCallback(
+    async (row: VaultObjectRow, nextName: string) => {
+      if (!supabase || !key || key.length !== 32) return;
+      const raw = pickVaultMetaRow(row);
+      if (!raw?.encrypted_meta) return;
+      const enc = reencryptVaultMetaWithFilename(key, raw.encrypted_meta, partition, nextName);
+      if (!enc) {
+        Alert.alert("Vault", "Couldn’t update that name.");
         return;
       }
-      const txt = await file.text();
-      const bundle = JSON.parse(txt) as AeadBundle;
-      const plain = aes256GcmDecrypt(key, bundle, utf8(`mm-vault/${prefix}`));
-      const preview = utf8decode(plain.slice(0, Math.min(120, plain.length)));
-      const disp = vaultItemDisplayName(row.storage_path);
-      Alert.alert(
-        disp.title + (disp.subtitle ? ` (${disp.subtitle})` : ""),
-        `Decrypted ${plain.length} bytes.\n\nPreview:\n${preview}${plain.length > 120 ? "…" : ""}`,
-        [
-          { text: "Close", style: "cancel" },
-          {
-            text: "Delete my file",
-            style: "destructive",
-            onPress: () => void deletePrivateVaultObject(row),
-          },
-        ],
-      );
-    } catch {
-      Alert.alert("Decrypt", "Could not open (wrong vault?).");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!vaultFocusObjectId) return;
-    setSection("private");
-  }, [vaultFocusObjectId]);
-
-  useEffect(() => {
-    if (!vaultFocusObjectId || section !== "private") return;
-    const hit = rows.find((r) => r.id === vaultFocusObjectId);
-    if (!hit) return;
-    setVaultFocusObjectId(null);
-    void openPrivateRow(hit);
-  }, [vaultFocusObjectId, section, rows, setVaultFocusObjectId]);
+      const { error } = await supabase.from("vault_metadata").update({ encrypted_meta: enc }).eq("vault_object_id", row.id);
+      if (error) Alert.alert("Vault", error.message);
+      else void refreshPrivate();
+    },
+    [supabase, key, partition, refreshPrivate],
+  );
 
   const openOpsRow = (row: OpsReportRow) => {
     if (!mapKey || mapKey.length !== 32) {
@@ -535,20 +739,308 @@ export default function VaultScreen() {
     }
   };
 
-  const privateFiltered = useMemo(() => {
-    const base = rows.filter((r) => r.storage_path.includes(`/${prefix}/`));
-    const inFolder = base.filter((r) => {
-      if (selectedFolderId == null) return r.folder_id == null;
-      return r.folder_id === selectedFolderId;
+  const privateListMerged = useMemo((): PrivateListItem[] => {
+    const inPartition = rows.filter((r) => rowVaultPartition(r, prefix) === prefix);
+
+    const queuedScoped =
+      driveNav === "my"
+        ? vaultQueued.filter((rec) => {
+            if (rec.partition !== prefix) return false;
+            if (rec.profile_id !== profileId) return false;
+            const p = rec.parent_vault_object_id ?? null;
+            return (p ?? null) === (currentFolderId ?? null);
+          })
+        : [];
+
+    const remoteItems: PrivateListItem[] = inPartition.flatMap((row): PrivateListItem[] => {
+      const raw = pickVaultMetaRow(row);
+      const { isFolder, parentId, trashedAt } = vaultMetaDbFields(raw);
+
+      if (driveNav === "trash") {
+        if (!trashedAt) return [];
+        return [{ kind: "remote", row }];
+      }
+      if (trashedAt) return [];
+
+      if (driveNav === "recent") {
+        if (isFolder) return [];
+        if (!row.storage_path) return [];
+        return [{ kind: "remote", row }];
+      }
+
+      if ((parentId ?? null) !== (currentFolderId ?? null)) return [];
+      return [{ kind: "remote", row }];
     });
-    const q = query.trim().toLowerCase();
-    if (!q) return inFolder;
-    return inFolder.filter((r) => {
-      const disp = vaultItemDisplayName(r.storage_path);
-      const hay = `${disp.title} ${disp.subtitle ?? ""} ${r.storage_path}`.toLowerCase();
-      return hay.includes(q);
+
+    const merged: PrivateListItem[] =
+      driveNav === "my" ? [...queuedScoped.map((rec) => ({ kind: "queued" as const, rec })), ...remoteItems] : remoteItems;
+
+    if (driveNav === "recent") {
+      const sorted = [...merged].sort((a, b) => {
+        const ta = a.kind === "queued" ? a.rec.queued_at : new Date(a.row.created_at).getTime();
+        const tb = b.kind === "queued" ? b.rec.queued_at : new Date(b.row.created_at).getTime();
+        return tb - ta;
+      });
+      return sorted.slice(0, 100);
+    }
+
+    return merged;
+  }, [rows, prefix, vaultQueued, profileId, driveNav, currentFolderId]);
+
+  const privateDriveData = useMemo((): DriveRow[] => {
+    const uploadingItems: DriveRow[] = uploadingRows
+      .filter(
+        (u) => driveNav === "my" && (u.parentVaultObjectId ?? null) === (currentFolderId ?? null),
+      )
+      .map((u): DriveRow => ({ ...u }));
+    const sortedItems = [...privateListMerged].sort((a, b) => {
+      const fa =
+        a.kind === "remote" && vaultMetaDbFields(pickVaultMetaRow(a.row)).isFolder ? 0 : 1;
+      const fb =
+        b.kind === "remote" && vaultMetaDbFields(pickVaultMetaRow(b.row)).isFolder ? 0 : 1;
+      if (fa !== fb) return fa - fb;
+      const na =
+        a.kind === "remote"
+          ? (remoteMetaById.get(a.row.id)?.filename ??
+              vaultItemDisplayName(a.row.storage_path ?? a.row.id).title)
+          : a.rec.local_label;
+      const nb =
+        b.kind === "remote"
+          ? (remoteMetaById.get(b.row.id)?.filename ??
+              vaultItemDisplayName(b.row.storage_path ?? b.row.id).title)
+          : b.rec.local_label;
+      return na.localeCompare(nb, undefined, { sensitivity: "base" });
     });
-  }, [rows, prefix, query, selectedFolderId]);
+    return [...uploadingItems, ...sortedItems];
+  }, [uploadingRows, privateListMerged, driveNav, currentFolderId, remoteMetaById]);
+
+  const privateEmptyMessage = useMemo(() => {
+    switch (driveNav) {
+      case "recent":
+        return "No recent files yet.\n\nUpload something to Team drive — it’ll show up here.";
+      case "trash":
+        return "Trash is empty.";
+      default:
+        return "This folder is empty.\n\nUse New → Upload file, or drag files anywhere on this screen.";
+    }
+  }, [driveNav]);
+
+  const vaultBreadcrumbs = useMemo((): VaultCrumb[] => {
+    if (driveNav === "recent") return [{ id: "__recent", label: "Recent" }];
+    if (driveNav === "trash") return [{ id: "__trash", label: "Trash" }];
+    const base: VaultCrumb[] = [{ id: null, label: "Team drive" }];
+    if (!currentFolderId) return base;
+    const chain: VaultCrumb[] = [];
+    let cur: string | null = currentFolderId;
+    while (cur) {
+      const row = rows.find((r) => r.id === cur);
+      if (!row) break;
+      const label =
+        remoteMetaById.get(row.id)?.filename ?? vaultItemDisplayName(row.storage_path ?? row.id).title;
+      chain.push({ id: cur, label });
+      cur = pickVaultMetaRow(row)?.parent_id ?? null;
+    }
+    chain.reverse();
+    return [...base, ...chain];
+  }, [driveNav, currentFolderId, rows, remoteMetaById]);
+
+  const loadDecrypted = useCallback(
+    async (row: VaultLightboxRow) => {
+      if (!supabase || !key || key.length !== 32) {
+        throw new Error("Unlock your Vault to open this file.");
+      }
+      if (!row.storage_path) {
+        throw new Error("Nothing to open here.");
+      }
+      const { data: file, error } = await supabase.storage.from("vault").download(row.storage_path);
+      if (error || !file) {
+        throw new Error(error?.message ?? "Couldn’t download this file.");
+      }
+      const txt = await file.text();
+      const bundle = JSON.parse(txt) as AeadBundle;
+      const plain = aes256GcmDecrypt(key, bundle, utf8(`mm-vault/${prefix}`));
+      const meta = remoteMetaById.get(row.id);
+      const mime = meta?.mimeType ?? "application/octet-stream";
+      return { bytes: plain, mime };
+    },
+    [supabase, key, prefix, remoteMetaById],
+  );
+
+  const openPrivateRow = useCallback(
+    async (row: VaultObjectRow) => {
+      if (Platform.OS === "web" && !isWebOnline()) {
+        Alert.alert("You're offline", "Reconnect to open files saved in your Vault.");
+        return;
+      }
+      if (!supabase || !key || key.length !== 32) {
+        Alert.alert("Vault", "Unlock your Vault to open this file.");
+        return;
+      }
+
+      const rawMetaRow = pickVaultMetaRow(row);
+      if (vaultMetaDbFields(rawMetaRow).isFolder) return;
+
+      const disp = vaultItemDisplayName(row.storage_path ?? row.id);
+      const meta = remoteMetaById.get(row.id);
+      const title = meta?.filename ?? disp.title;
+      const mimeRaw = meta?.mimeType ?? "application/octet-stream";
+      const mime = mimeRaw.toLowerCase();
+      const isImage = mime.startsWith("image/");
+      const isPdf = mime === "application/pdf" || mime.includes("pdf");
+
+      if (isImage) {
+        const metaMap = remoteMetaById as unknown as Map<string, VaultMetaPlainV1 | null>;
+        const entries: VaultLightboxEntry[] = [];
+        for (const d of privateDriveData) {
+          if (d.kind !== "remote") continue;
+          const m = getPrivateItemMime(d, metaMap).toLowerCase();
+          if (!m.startsWith("image/")) continue;
+          const r = d.row;
+          const mm = remoteMetaById.get(r.id);
+          const t = mm?.filename ?? vaultItemDisplayName(r.storage_path ?? r.id).title;
+          const mim = mm?.mimeType ?? "application/octet-stream";
+          entries.push({ id: r.id, row: r, title: t, mime: mim });
+        }
+        const idx = entries.findIndex((e) => e.id === row.id);
+        setLightbox({ entries, index: idx >= 0 ? idx : 0 });
+        return;
+      }
+
+      if (isPdf) {
+        setLightbox({
+          entries: [{ id: row.id, row, title, mime: mimeRaw }],
+          index: 0,
+        });
+        return;
+      }
+
+      setLoading(true);
+      try {
+        if (!row.storage_path) return;
+        const { data: file, error } = await supabase.storage.from("vault").download(row.storage_path);
+        if (error || !file) {
+          Alert.alert("Couldn’t open file", error?.message ?? "Something went wrong. Try again.");
+          return;
+        }
+        const txt = await file.text();
+        const bundle = JSON.parse(txt) as AeadBundle;
+        const plain = aes256GcmDecrypt(key, bundle, utf8(`mm-vault/${prefix}`));
+        const previewText = utf8decode(plain.slice(0, Math.min(4000, plain.length)));
+        Alert.alert(
+          title + (disp.subtitle ? ` (${disp.subtitle})` : ""),
+          `Preview:\n${previewText}${plain.length > 4000 ? "…" : ""}`,
+          [
+            { text: "Close", style: "cancel" },
+            {
+              text: "Delete",
+              style: "destructive",
+              onPress: () => void deletePrivateVaultObject(row),
+            },
+          ],
+        );
+      } catch {
+        Alert.alert("Unable to unlock file", "Check your connection and try again.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [supabase, key, remoteMetaById, privateDriveData, prefix, deletePrivateVaultObject],
+  );
+
+  const openPrivateItem = useCallback((item: PrivateListItem) => {
+    if (item.kind === "queued") {
+      Alert.alert(
+        "Waiting to sync",
+        "This file is saved on your device and will finish uploading when you're back online.",
+      );
+      return;
+    }
+    void openPrivateRow(item.row);
+  }, [openPrivateRow]);
+
+  useEffect(() => {
+    if (!vaultFocusObjectId) return;
+    setSection("private");
+  }, [vaultFocusObjectId]);
+
+  useEffect(() => {
+    if (!vaultFocusObjectId || section !== "private") return;
+    const hit = rows.find((r) => r.id === vaultFocusObjectId);
+    if (!hit) return;
+    setVaultFocusObjectId(null);
+    if (vaultMetaDbFields(pickVaultMetaRow(hit)).isFolder) setCurrentFolderId(hit.id);
+    else void openPrivateRow(hit);
+  }, [vaultFocusObjectId, section, rows, setVaultFocusObjectId, openPrivateRow]);
+
+  const handleActivateRemoteRow = useCallback(
+    (row: VaultObjectRow) => {
+      const { isFolder } = vaultMetaDbFields(pickVaultMetaRow(row));
+      const run = () => {
+        if (isFolder) setCurrentFolderId(row.id);
+        else void openPrivateRow(row);
+      };
+      if (Platform.OS !== "web") {
+        run();
+        return;
+      }
+      const now = Date.now();
+      const last = lastActivateRef.current;
+      if (last.id === row.id && now - last.t < 420) {
+        lastActivateRef.current = { id: "", t: 0 };
+        run();
+      } else {
+        lastActivateRef.current = { id: row.id, t: now };
+      }
+    },
+    [openPrivateRow],
+  );
+
+  const submitNewVaultFolder = useCallback(async () => {
+    if (!supabase || !profileId || !key || key.length !== 32) return;
+    const label = newFolderDraft.trim();
+    if (!label) {
+      Alert.alert("New folder", "Enter a name.");
+      return;
+    }
+    const res = await insertVaultFolder({
+      supabase,
+      profileId,
+      vaultKey: key,
+      partition,
+      folderName: label,
+      parentVaultObjectId: driveNav === "my" ? currentFolderId : null,
+    });
+    if (!res.ok) {
+      Alert.alert("Folder", res.error);
+      return;
+    }
+    setNewFolderModalOpen(false);
+    setNewFolderDraft("");
+    void refreshPrivate();
+  }, [supabase, profileId, key, partition, newFolderDraft, driveNav, currentFolderId, refreshPrivate]);
+
+  const moveFolderOptions = useMemo((): { id: string | null; label: string }[] => {
+    if (!moveTarget) return [];
+    const opts: { id: string | null; label: string }[] = [{ id: null, label: "Team drive (root)" }];
+    const blocked = new Set<string>();
+    const walk = (id: string) => {
+      blocked.add(id);
+      for (const r of rows) {
+        if ((pickVaultMetaRow(r)?.parent_id ?? null) === id) walk(r.id);
+      }
+    };
+    walk(moveTarget.id);
+    for (const r of rows) {
+      if (rowVaultPartition(r, prefix) !== prefix) continue;
+      if (!vaultMetaDbFields(pickVaultMetaRow(r)).isFolder) continue;
+      if (blocked.has(r.id)) continue;
+      if (r.id === moveTarget.id) continue;
+      const label =
+        remoteMetaById.get(r.id)?.filename ?? vaultItemDisplayName(r.storage_path ?? r.id).title;
+      opts.push({ id: r.id, label });
+    }
+    return opts.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+  }, [moveTarget, rows, prefix, remoteMetaById]);
 
   const folderDisplay = useCallback(
     (f: VaultFolderRow) => {
@@ -583,7 +1075,6 @@ export default function VaultScreen() {
 
   const borderM = TacticalPalette.border;
   const surface = TacticalPalette.elevated;
-  const panelBg = TacticalPalette.panel;
 
   const opsKindIcon = (kind: OpsDocKind): ComponentProps<typeof FontAwesome>["name"] => {
     switch (kind) {
@@ -608,97 +1099,236 @@ export default function VaultScreen() {
     }
   };
 
-  const quickAccessPrivate = useMemo(() => privateFiltered.slice(0, 4), [privateFiltered]);
+  const quickAccessPrivate = useMemo(() => privateListMerged.slice(0, 4), [privateListMerged]);
   const quickAccessOps = useMemo(() => opsFiltered.slice(0, 4), [opsFiltered]);
 
-  const sidebarNav = (id: VaultSection, label: string) => {
-    const active = section === id;
+  const renderPrivateList = ({ item }: { item: PrivateListItem }) => {
+    if (item.kind === "queued") {
+      const rec = item.rec;
+      return (
+        <Pressable
+          onPress={() => openPrivateItem(item)}
+          style={({ pressed }) => [
+            styles.driveRow,
+            {
+              borderColor: borderM,
+              backgroundColor: pressed ? TacticalPalette.panel : surface,
+            },
+          ]}>
+          <View style={[styles.iconBubble, { backgroundColor: TacticalPalette.coyote }]}>
+            <FontAwesome name="clock-o" size={20} color={TacticalPalette.matteBlack} />
+          </View>
+          <View style={styles.driveText}>
+            <Text style={[styles.driveTitle, { color: p.text }]} numberOfLines={1}>
+              {rec.local_label}
+            </Text>
+            <Text style={[styles.driveMeta, { color: p.tabIconDefault }]} numberOfLines={1}>
+              Queued · {formatBytes(rec.local_size)} · {rec.local_mime}
+            </Text>
+          </View>
+          <FontAwesome name="chevron-right" size={14} color={p.tabIconDefault} />
+        </Pressable>
+      );
+    }
+    const row = item.row;
+    const disp = vaultItemDisplayName(row.storage_path ?? row.id);
+    const meta = remoteMetaById.get(row.id);
+    const title = meta?.filename ?? disp.title;
+    const { isFolder } = vaultMetaDbFields(pickVaultMetaRow(row));
+    const sizeBit = meta?.size != null ? formatBytes(meta.size) : disp.subtitle;
+    const metaLine = [(isFolder ? "Folder" : sizeBit) ?? "", formatVaultListDate(row.created_at)]
+      .filter(Boolean)
+      .join(" · ");
     return (
-      <Pressable
-        key={id}
-        onPress={() => {
-          setSection(id);
-          if (id === "private") void refreshPrivate();
-          else void refreshOps(id);
-        }}
-        style={({ pressed }) => [
-          styles.sideItem,
-          {
-            borderLeftWidth: 3,
-            borderLeftColor: active ? TacticalPalette.accent : "transparent",
-            backgroundColor: active ? panelBg : pressed ? TacticalPalette.charcoal : "transparent",
-          },
-        ]}>
-        <FontAwesome
-          name={sectionIcon(id)}
-          size={18}
-          color={active ? TacticalPalette.accent : TacticalPalette.boneMuted}
-          style={{ marginRight: sidebarLabelsVisible ? 12 : 0 }}
-        />
-        {sidebarLabelsVisible ? (
-          <Text style={{ color: active ? TacticalPalette.bone : TacticalPalette.boneMuted, fontWeight: "700", fontSize: 13 }} numberOfLines={1}>
-            {label}
-          </Text>
-        ) : null}
-      </Pressable>
-    );
-  };
-
-  const renderPrivateList = ({ item }: { item: VaultObjectRow }) => {
-    const disp = vaultItemDisplayName(item.storage_path);
-    const meta = [disp.subtitle, formatVaultListDate(item.created_at)].filter(Boolean).join(" · ");
-    return (
-      <Pressable
-        onPress={() => void openPrivateRow(item)}
-        style={({ pressed }) => [
+      <View
+        style={[
           styles.driveRow,
-          {
-            borderColor: borderM,
-            backgroundColor: pressed ? TacticalPalette.panel : surface,
-          },
+          { borderColor: borderM, backgroundColor: surface, alignItems: "center" },
         ]}>
-        <View style={[styles.iconBubble, { backgroundColor: TacticalPalette.oliveDrab }]}>
-          <FontAwesome name="lock" size={20} color={TacticalPalette.bone} />
-        </View>
-        <View style={styles.driveText}>
-          <Text style={[styles.driveTitle, { color: p.text }]} numberOfLines={1}>
-            {disp.title}
-          </Text>
-          <Text style={[styles.driveMeta, { color: p.tabIconDefault }]} numberOfLines={1}>
-            You · {meta || formatVaultListDate(item.created_at)}
-          </Text>
-        </View>
-        <FontAwesome name="chevron-right" size={14} color={p.tabIconDefault} />
-      </Pressable>
+        <Pressable
+          onPress={() => handleActivateRemoteRow(row)}
+          style={({ pressed }) => [{ flex: 1, flexDirection: "row", alignItems: "center", opacity: pressed ? 0.92 : 1 }]}>
+          <View
+            style={[
+              styles.iconBubble,
+              { backgroundColor: isFolder ? TacticalPalette.coyote : TacticalPalette.oliveDrab },
+            ]}>
+            <FontAwesome name={isFolder ? "folder" : "file-o"} size={20} color={TacticalPalette.matteBlack} />
+          </View>
+          <View style={styles.driveText}>
+            <Text style={[styles.driveTitle, { color: p.text }]} numberOfLines={1}>
+              {title}
+            </Text>
+            <Text style={[styles.driveMeta, { color: p.tabIconDefault }]} numberOfLines={1}>
+              {driveNav === "trash" ? "In Trash" : `Team · ${metaLine}`}
+            </Text>
+          </View>
+        </Pressable>
+        <Pressable onPress={() => setMoreMenuRow(row)} hitSlop={12} accessibilityLabel="More options">
+          <FontAwesome name="ellipsis-v" size={18} color={p.tabIconDefault} />
+        </Pressable>
+      </View>
     );
   };
 
-  const renderPrivateGrid = ({ item }: { item: VaultObjectRow }) => {
-    const disp = vaultItemDisplayName(item.storage_path);
-    return (
-      <Pressable
-        onPress={() => void openPrivateRow(item)}
-        style={({ pressed }) => [
-          styles.gridCell,
-          {
-            borderColor: borderM,
-            backgroundColor: pressed ? TacticalPalette.panel : surface,
-          },
-        ]}>
-        <FontAwesome name="file-o" size={32} color={p.tint} style={{ marginBottom: 10 }} />
-        <Text style={[styles.gridTitle, { color: p.text }]} numberOfLines={2}>
-          {disp.title}
-        </Text>
-        {disp.subtitle ? (
-          <Text style={[styles.gridSub, { color: p.tint }]} numberOfLines={1}>
-            {disp.subtitle}
+  const renderPrivateGrid = ({ item }: { item: PrivateListItem }) => {
+    if (item.kind === "queued") {
+      const rec = item.rec;
+      const thumb = rec.local_thumb_data_url ? (
+        <Image source={{ uri: rec.local_thumb_data_url }} style={styles.gridThumb} />
+      ) : (
+        <FontAwesome name="clock-o" size={32} color={p.tint} style={{ marginBottom: 10 }} />
+      );
+      return (
+        <Pressable
+          onPress={() => openPrivateItem(item)}
+          style={({ pressed }) => [
+            styles.gridCell,
+            {
+              borderColor: borderM,
+              backgroundColor: pressed ? TacticalPalette.panel : surface,
+            },
+          ]}>
+          {thumb}
+          <Text style={[styles.gridTitle, { color: p.text }]} numberOfLines={2}>
+            {rec.local_label}
           </Text>
-        ) : null}
-        <Text style={[styles.gridMeta, { color: p.tabIconDefault }]} numberOfLines={1}>
-          {formatVaultListDate(item.created_at)}
-        </Text>
-      </Pressable>
+          <Text style={[styles.gridSub, { color: p.tint }]} numberOfLines={1}>
+            Queued
+          </Text>
+          <Text style={[styles.gridMeta, { color: p.tabIconDefault }]} numberOfLines={1}>
+            {formatBytes(rec.local_size)}
+          </Text>
+        </Pressable>
+      );
+    }
+    const row = item.row;
+    const disp = vaultItemDisplayName(row.storage_path ?? row.id);
+    const meta = remoteMetaById.get(row.id);
+    const title = meta?.filename ?? disp.title;
+    const { isFolder } = vaultMetaDbFields(pickVaultMetaRow(row));
+    const thumbUrl = thumbUrlById[row.id];
+    const thumb = isFolder ? (
+      <FontAwesome name="folder" size={40} color={p.tint} style={{ marginBottom: 10 }} />
+    ) : thumbUrl ? (
+      <Image source={{ uri: thumbUrl }} style={styles.gridThumb} />
+    ) : (
+      <FontAwesome name="file-o" size={32} color={p.tint} style={{ marginBottom: 10 }} />
     );
+    return (
+      <View style={[styles.gridCell, { borderColor: borderM, backgroundColor: surface }]}>
+        <Pressable onPress={() => handleActivateRemoteRow(row)} style={{ width: "100%", alignItems: "center" }}>
+          {thumb}
+          <Text style={[styles.gridTitle, { color: p.text }]} numberOfLines={2}>
+            {title}
+          </Text>
+          {!isFolder && disp.subtitle && !meta?.filename ? (
+            <Text style={[styles.gridSub, { color: p.tint }]} numberOfLines={1}>
+              {disp.subtitle}
+            </Text>
+          ) : null}
+          <Text style={[styles.gridMeta, { color: p.tabIconDefault }]} numberOfLines={1}>
+            {isFolder
+              ? "Folder"
+              : [meta?.size != null ? formatBytes(meta.size) : null, formatVaultListDate(row.created_at)]
+                  .filter(Boolean)
+                  .join(" · ")}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setMoreMenuRow(row)}
+          hitSlop={10}
+          style={{ position: "absolute", top: 8, right: 8 }}
+          accessibilityLabel="More options">
+          <FontAwesome name="ellipsis-v" size={16} color={p.tabIconDefault} />
+        </Pressable>
+      </View>
+    );
+  };
+
+  const renderPrivateDriveList = ({ item }: { item: DriveRow }) => {
+    if (item.kind === "uploading") {
+      return (
+        <View
+          style={[
+            styles.driveRow,
+            {
+              borderColor: borderM,
+              backgroundColor: surface,
+            },
+          ]}>
+          <View style={[styles.iconBubble, { backgroundColor: TacticalPalette.accentDim }]}>
+            <ActivityIndicator color={TacticalPalette.bone} size="small" />
+          </View>
+          <View style={[styles.driveText, { flex: 1 }]}>
+            <Text style={[styles.driveTitle, { color: p.text }]} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <View
+              style={{
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: TacticalPalette.charcoal,
+                overflow: "hidden",
+                marginTop: 8,
+              }}>
+              <View
+                style={{
+                  height: "100%",
+                  width: `${Math.round(Math.min(100, Math.max(0, item.pct)))}%`,
+                  backgroundColor: TacticalPalette.accent,
+                }}
+              />
+            </View>
+            <Text style={[styles.driveMeta, { color: p.tabIconDefault, marginTop: 6 }]} numberOfLines={2}>
+              {item.label}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+    return renderPrivateList({ item });
+  };
+
+  const renderPrivateDriveGrid = ({ item }: { item: DriveRow }) => {
+    if (item.kind === "uploading") {
+      return (
+        <View
+          style={[
+            styles.gridCell,
+            {
+              borderColor: borderM,
+              backgroundColor: surface,
+            },
+          ]}>
+          <FontAwesome name="cloud-upload" size={30} color={p.tint} style={{ marginBottom: 8 }} />
+          <Text style={[styles.gridTitle, { color: p.text }]} numberOfLines={2}>
+            {item.name}
+          </Text>
+          <View
+            style={{
+              height: 6,
+              borderRadius: 3,
+              backgroundColor: TacticalPalette.charcoal,
+              overflow: "hidden",
+              width: "100%",
+              marginVertical: 8,
+            }}>
+            <View
+              style={{
+                height: "100%",
+                width: `${Math.round(Math.min(100, Math.max(0, item.pct)))}%`,
+                backgroundColor: TacticalPalette.accent,
+              }}
+            />
+          </View>
+          <Text style={[styles.gridMeta, { color: p.tabIconDefault }]} numberOfLines={2}>
+            {item.label}
+          </Text>
+        </View>
+      );
+    }
+    return renderPrivateGrid({ item });
   };
 
   const renderOpsList = ({ item }: { item: OpsReportRow }) => {
@@ -786,22 +1416,40 @@ export default function VaultScreen() {
 
   const emptyCopy =
     section === "private"
-      ? "No files yet. Upload photos or documents — they stay encrypted in your partition.\n\nNaming tips: use kebab-case or short callsigns in filenames when you control the source (e.g. charlie-sierra-roster or CS-summary)."
+      ? "No files yet. Upload photos or documents — they stay encrypted for your team on this partition.\n\nNaming tips: use kebab-case or short callsigns in filenames when you control the source (e.g. charlie-sierra-roster or CS-summary)."
       : "Nothing in this folder. Create items from the Missions tab (mission plan, SITREP, AAR). Titles like charlie-sierra or CS are formatted for quick scanning.";
 
-  const renderQuickPrivate = (item: VaultObjectRow) => {
-    const disp = vaultItemDisplayName(item.storage_path);
+  const renderQuickPrivate = (item: PrivateListItem) => {
+    if (item.kind === "queued") {
+      return (
+        <Pressable
+          key={`q-${item.rec.object_id}`}
+          onPress={() => openPrivateItem(item)}
+          style={({ pressed }) => [
+            styles.quickTile,
+            { borderColor: borderM, opacity: pressed ? 0.9 : 1 },
+          ]}>
+          <FontAwesome name="clock-o" size={18} color={TacticalPalette.accent} />
+          <Text style={[styles.quickTileText, { color: p.text }]} numberOfLines={2}>
+            {item.rec.local_label}
+          </Text>
+        </Pressable>
+      );
+    }
+    const row = item.row;
+    const disp = vaultItemDisplayName(row.storage_path ?? row.id);
+    const meta = remoteMetaById.get(row.id);
     return (
       <Pressable
-        key={item.id}
-        onPress={() => void openPrivateRow(item)}
+        key={row.id}
+        onPress={() => handleActivateRemoteRow(row)}
         style={({ pressed }) => [
           styles.quickTile,
           { borderColor: borderM, opacity: pressed ? 0.9 : 1 },
         ]}>
         <FontAwesome name="file-o" size={18} color={TacticalPalette.accent} />
         <Text style={[styles.quickTileText, { color: p.text }]} numberOfLines={2}>
-          {disp.title}
+          {meta?.filename ?? disp.title}
         </Text>
       </Pressable>
     );
@@ -834,6 +1482,25 @@ export default function VaultScreen() {
     );
   };
 
+  const onDriveNavChange = (n: VaultDriveNav) => {
+    setDriveNav(n);
+    if (n !== "my") setCurrentFolderId(null);
+  };
+
+  const onVaultCrumbPress = (index: number) => {
+    if (driveNav === "recent" || driveNav === "trash") {
+      setDriveNav("my");
+      setCurrentFolderId(null);
+      return;
+    }
+    if (index === 0) {
+      setCurrentFolderId(null);
+      return;
+    }
+    const c = vaultBreadcrumbs[index];
+    if (c?.id && c.id !== "__recent" && c.id !== "__trash") setCurrentFolderId(c.id);
+  };
+
   return (
     <View style={[styles.shell, { backgroundColor: p.background }]}>
       {Platform.OS === "web" && vaultFromCache ? (
@@ -846,199 +1513,102 @@ export default function VaultScreen() {
             borderBottomColor: borderM,
           }}>
           <Text style={{ color: TacticalPalette.bone, fontSize: 12, lineHeight: 17 }}>
-            Offline — showing the last vault index cached in this browser. Reconnect to refresh, upload, or download file
-            bodies from storage.
+            You’re offline — showing the last saved view of your Vault in this browser. Reconnect to refresh or open
+            files.
           </Text>
         </View>
       ) : null}
-      <View style={styles.driveRowLayout}>
-        <View
-          style={[
-            styles.sidebar,
-            {
-              width: driveSidebarWidth,
-              borderRightWidth: StyleSheet.hairlineWidth,
-              borderRightColor: borderM,
-              backgroundColor: TacticalPalette.charcoal,
-            },
-          ]}>
-          {isWideLayout ? (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: sidebarLabelsVisible ? "space-between" : "center",
-                paddingHorizontal: sidebarLabelsVisible ? 10 : 6,
-                paddingLeft: sidebarLabelsVisible ? 14 : 6,
-                paddingRight: 8,
-                marginBottom: sidebarLabelsVisible ? 6 : 10,
-              }}>
-              {sidebarLabelsVisible ? (
-                <Text style={[styles.sidebarBrand, { paddingHorizontal: 0, marginBottom: 0, flexShrink: 1 }]} numberOfLines={1}>
-                  Drive
-                </Text>
-              ) : null}
-              <Pressable
-                onPress={() => setDriveSidebarMinimized((v) => !v)}
-                accessibilityRole="button"
-                accessibilityLabel={sidebarLabelsVisible ? "Collapse drive sidebar" : "Expand drive sidebar"}
-                hitSlop={8}
-                style={({ pressed }) => ({
-                  paddingVertical: 6,
-                  paddingHorizontal: sidebarLabelsVisible ? 8 : 10,
-                  borderRadius: 8,
-                  backgroundColor: pressed ? TacticalPalette.panel : "transparent",
-                })}>
-                <FontAwesome
-                  name={sidebarLabelsVisible ? "angle-double-left" : "angle-double-right"}
-                  size={18}
-                  color={TacticalPalette.boneMuted}
-                />
-              </Pressable>
-            </View>
-          ) : null}
-          {sidebarNav("private", "My drive")}
-          {sidebarNav("mission_plan", "Mission plans")}
-          {sidebarNav("sitrep", "SITREPs")}
-          {sidebarNav("aar", "After action")}
-          {sidebarNav("target_package", "Targets")}
-          {sidebarNav("intel_report", "Intel")}
-          {sidebarNav("spotrep", "SPOTREP")}
-          {sidebarNav("medevac_nine_line", "9-line MED")}
-          {sidebarNav("route_recon", "Route recon")}
-          <Pressable
-            onPress={() => setTeamHubOpen(true)}
-            style={({ pressed }) => [
-              styles.sideItem,
-              {
-                borderLeftWidth: 3,
-                borderLeftColor: "transparent",
-                backgroundColor: pressed ? TacticalPalette.charcoal : "transparent",
-                marginTop: 8,
-                borderTopWidth: StyleSheet.hairlineWidth,
-                borderTopColor: borderM,
-                paddingTop: 14,
-              },
-            ]}>
-            <FontAwesome
-              name="users"
-              size={18}
-              color={TacticalPalette.coyote}
-              style={{ marginRight: sidebarLabelsVisible ? 12 : 0 }}
-            />
-            {sidebarLabelsVisible ? (
-              <Text
-                style={{ color: TacticalPalette.bone, fontWeight: "700", fontSize: 13 }}
-                numberOfLines={1}>
-                Team hub
-              </Text>
-            ) : null}
-          </Pressable>
-          {section === "private" ? (
-            <View style={{ paddingHorizontal: 10, paddingTop: 14, gap: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderM, marginTop: 8 }}>
-              <Text style={{ color: TacticalPalette.boneMuted, fontSize: 10, fontWeight: "800", letterSpacing: 0.6 }}>
-                FOLDERS
-              </Text>
-              {selectedFolderId != null ? (
-                <Pressable
-                  onPress={() => {
-                    const cur = folders.find((x) => x.id === selectedFolderId);
-                    setSelectedFolderId(cur?.parent_id ?? null);
-                  }}
-                  style={({ pressed }) => ({
-                    paddingVertical: 8,
-                    paddingHorizontal: 8,
-                    borderRadius: 8,
-                    backgroundColor: pressed ? TacticalPalette.charcoal : "transparent",
-                  })}>
-                  <Text style={{ color: TacticalPalette.accent, fontSize: 12, fontWeight: "700" }}>↑ Parent</Text>
-                </Pressable>
-              ) : null}
-              <Pressable
-                onPress={() => setSelectedFolderId(null)}
-                style={({ pressed }) => ({
-                  paddingVertical: 8,
-                  paddingHorizontal: 8,
-                  borderRadius: 8,
-                  backgroundColor: selectedFolderId == null ? panelBg : pressed ? TacticalPalette.charcoal : "transparent",
-                })}>
-                <Text style={{ color: TacticalPalette.bone, fontSize: 12, fontWeight: selectedFolderId == null ? "800" : "600" }}>
-                  Root
-                </Text>
-              </Pressable>
-              {folders
-                .filter((f) => f.parent_id === selectedFolderId)
-                .map((f) => (
-                  <Pressable
-                    key={f.id}
-                    onPress={() => setSelectedFolderId(f.id)}
-                    style={({ pressed }) => ({
-                      paddingVertical: 8,
-                      paddingHorizontal: 8,
-                      borderRadius: 8,
-                      backgroundColor: pressed ? TacticalPalette.charcoal : "transparent",
-                    })}>
-                    <Text style={{ color: TacticalPalette.bone, fontSize: 12 }} numberOfLines={1}>
-                      {folderDisplay(f)}
-                    </Text>
-                  </Pressable>
-                ))}
-              {sidebarLabelsVisible ? (
-                <>
-                  <TextInput
-                    placeholder="New folder"
-                    placeholderTextColor={TacticalPalette.boneMuted}
-                    value={newFolderName}
-                    onChangeText={setNewFolderName}
-                    style={{
-                      borderWidth: 1,
-                      borderColor: borderM,
-                      borderRadius: 8,
-                      padding: 8,
-                      fontSize: 12,
-                      color: TacticalPalette.bone,
-                      marginTop: 6,
-                    }}
-                  />
-                  <Pressable
-                    onPress={() => void createFolder()}
-                    style={{
-                      paddingVertical: 10,
-                      alignItems: "center",
-                      backgroundColor: TacticalPalette.accentDim,
-                      borderRadius: 8,
-                    }}>
-                    <Text style={{ color: TacticalPalette.bone, fontWeight: "800", fontSize: 12 }}>Create encrypted folder</Text>
-                  </Pressable>
-                </>
-              ) : null}
-            </View>
-          ) : null}
-        </View>
-
-        <View style={[styles.mainCol, { maxWidth: 1200 }]}>
+      <VaultFullBleedDropzone
+        disabled={section !== "private" || Platform.OS !== "web" || uploadBusy || !key || key.length !== 32}
+        onFiles={(files) => {
+          void (async () => {
+            const mapped = await Promise.all(
+              files.map(async (f) => ({
+                bytes: new Uint8Array(await f.arrayBuffer()),
+                name: f.name?.trim() ? f.name : "upload",
+                mime: f.type || undefined,
+                file: f,
+              })),
+            );
+            await uploadVaultFiles(mapped);
+          })();
+        }}>
+        <View style={styles.driveRowLayout}>
+          <VaultDriveSidebar
+            activeSection={section}
+            onSelectSection={(s) => {
+              setSection(s);
+              if (s === "private") void refreshPrivate();
+              else void refreshOps(s);
+            }}
+            driveNav={driveNav}
+            onChangeNav={onDriveNavChange}
+            onUploadFile={() => void pickDoc()}
+            onNewFolder={() => setNewFolderModalOpen(true)}
+            onOpenTeamHub={() => setTeamHubOpen(true)}
+            opsFolders={OPS_DRIVE_FOLDERS}
+          />
+          <View style={[styles.mainCol, { maxWidth: 1200, flex: 1 }]}>
           <Text style={[styles.breadcrumb, { color: p.tabIconDefault }]}>
             {(vaultMode ?? "main").toUpperCase()} · {sectionTitle(section)}
             {loading ? " · …" : ""}
           </Text>
 
-          <View style={[styles.searchBar, { borderColor: borderM, backgroundColor: surface }]}>
-            <FontAwesome name="search" size={16} color={p.tabIconDefault} style={{ marginRight: 10 }} />
-            <TextInput
-              placeholder="Search in this folder"
-              placeholderTextColor={TacticalPalette.boneMuted}
-              value={query}
-              onChangeText={setQuery}
-              style={[styles.searchInput, { color: p.text }]}
-              autoCorrect={false}
-              autoCapitalize="none"
-            />
-            {query.length ? (
-              <Pressable onPress={() => setQuery("")} hitSlop={10}>
-                <Text style={{ color: p.tint, fontWeight: "700" }}>Clear</Text>
-              </Pressable>
-            ) : null}
-          </View>
+          {section === "private" ? (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 12,
+                marginBottom: 12,
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderBottomColor: borderM,
+                paddingBottom: 10,
+              }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <VaultDriveBreadcrumbs crumbs={vaultBreadcrumbs} onCrumbPress={onVaultCrumbPress} />
+                <Text style={{ color: TacticalPalette.boneMuted, fontSize: 11, marginTop: 4, fontWeight: "700" }}>
+                  {Platform.OS === "web" ? "Double-click to open · right for more" : "Tap to open · ⋮ for more"}
+                </Text>
+              </View>
+              <View style={styles.viewToggle}>
+                <Pressable
+                  onPress={() => void setVaultDriveViewMode("list")}
+                  style={[
+                    styles.viewBtn,
+                    viewMode === "list" && { backgroundColor: TacticalPalette.panel },
+                  ]}>
+                  <FontAwesome name="list" size={16} color={p.text} />
+                </Pressable>
+                <Pressable
+                  onPress={() => void setVaultDriveViewMode("grid")}
+                  style={[
+                    styles.viewBtn,
+                    viewMode === "grid" && { backgroundColor: TacticalPalette.panel },
+                  ]}>
+                  <FontAwesome name="th-large" size={16} color={p.text} />
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <View style={[styles.searchBar, { borderColor: borderM, backgroundColor: surface }]}>
+              <FontAwesome name="search" size={16} color={p.tabIconDefault} style={{ marginRight: 10 }} />
+              <TextInput
+                placeholder="Search in this folder"
+                placeholderTextColor={TacticalPalette.boneMuted}
+                value={query}
+                onChangeText={setQuery}
+                style={[styles.searchInput, { color: p.text }]}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              {query.length ? (
+                <Pressable onPress={() => setQuery("")} hitSlop={10}>
+                  <Text style={{ color: p.tint, fontWeight: "700" }}>Clear</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          )}
 
           {(section === "private" ? quickAccessPrivate.length > 0 : quickAccessOps.length > 0) ? (
             <View style={styles.quickSection}>
@@ -1052,24 +1622,26 @@ export default function VaultScreen() {
           ) : null}
 
           <View style={styles.toolbar}>
-            <View style={styles.viewToggle}>
-              <Pressable
-                onPress={() => void setVaultDriveViewMode("list")}
-                style={[
-                  styles.viewBtn,
-                  viewMode === "list" && { backgroundColor: TacticalPalette.panel },
-                ]}>
-                <FontAwesome name="list" size={16} color={p.text} />
-              </Pressable>
-              <Pressable
-                onPress={() => void setVaultDriveViewMode("grid")}
-                style={[
-                  styles.viewBtn,
-                  viewMode === "grid" && { backgroundColor: TacticalPalette.panel },
-                ]}>
-                <FontAwesome name="th-large" size={16} color={p.text} />
-              </Pressable>
-            </View>
+            {section === "private" ? <View style={{ flex: 1 }} /> : (
+              <View style={styles.viewToggle}>
+                <Pressable
+                  onPress={() => void setVaultDriveViewMode("list")}
+                  style={[
+                    styles.viewBtn,
+                    viewMode === "list" && { backgroundColor: TacticalPalette.panel },
+                  ]}>
+                  <FontAwesome name="list" size={16} color={p.text} />
+                </Pressable>
+                <Pressable
+                  onPress={() => void setVaultDriveViewMode("grid")}
+                  style={[
+                    styles.viewBtn,
+                    viewMode === "grid" && { backgroundColor: TacticalPalette.panel },
+                  ]}>
+                  <FontAwesome name="th-large" size={16} color={p.text} />
+                </Pressable>
+              </View>
+            )}
             {section === "private" ? (
               <View style={[styles.uploadSplit, { alignItems: "center" }]}>
                 <Pressable
@@ -1099,22 +1671,29 @@ export default function VaultScreen() {
           {section === "private" ? (
             <FlatList
               style={{ flex: 1 }}
-              data={privateFiltered}
-              keyExtractor={(i) => i.id}
+              data={privateDriveData}
+              keyExtractor={(i) =>
+                i.kind === "uploading"
+                  ? `up-${i.uploadId}`
+                  : i.kind === "queued"
+                    ? `q-${i.rec.object_id}`
+                    : i.row.id
+              }
               numColumns={viewMode === "grid" ? 2 : 1}
-              key={viewMode}
+              key={`${viewMode}-${driveNav}-${currentFolderId ?? "root"}`}
               columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
               ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
               refreshing={refreshing}
               onRefresh={async () => {
                 setRefreshing(true);
+                await reloadQueued();
                 await refreshPrivate();
                 setRefreshing(false);
               }}
               ListEmptyComponent={
-                <Text style={[styles.empty, { color: p.tabIconDefault }]}>{emptyCopy}</Text>
+                <Text style={[styles.empty, { color: p.tabIconDefault }]}>{privateEmptyMessage}</Text>
               }
-              renderItem={viewMode === "grid" ? renderPrivateGrid : renderPrivateList}
+              renderItem={viewMode === "grid" ? renderPrivateDriveGrid : renderPrivateDriveList}
             />
           ) : (
             <FlatList
@@ -1137,8 +1716,210 @@ export default function VaultScreen() {
               renderItem={viewMode === "grid" ? renderOpsGrid : renderOpsList}
             />
           )}
+          </View>
         </View>
-      </View>
+      </VaultFullBleedDropzone>
+
+      <Modal visible={newFolderModalOpen} transparent animationType="fade" onRequestClose={() => setNewFolderModalOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 24 }}>
+          <View
+            style={{
+              backgroundColor: TacticalPalette.elevated,
+              borderRadius: 14,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: TacticalPalette.border,
+              maxWidth: 420,
+              alignSelf: "center",
+              width: "100%",
+            }}>
+            <Text style={{ color: TacticalPalette.bone, fontWeight: "900", fontSize: 16, marginBottom: 10 }}>
+              New folder
+            </Text>
+            <TextInput
+              value={newFolderDraft}
+              onChangeText={setNewFolderDraft}
+              placeholder="Folder name"
+              placeholderTextColor={TacticalPalette.boneMuted}
+              style={{
+                borderWidth: 1,
+                borderColor: TacticalPalette.border,
+                borderRadius: 10,
+                padding: 12,
+                color: TacticalPalette.bone,
+                marginBottom: 14,
+              }}
+            />
+            <View style={{ flexDirection: "row", gap: 14, justifyContent: "flex-end", alignItems: "center" }}>
+              <Pressable onPress={() => setNewFolderModalOpen(false)}>
+                <Text style={{ color: TacticalPalette.boneMuted, fontWeight: "800" }}>Cancel</Text>
+              </Pressable>
+              <Pressable onPress={() => void submitNewVaultFolder()}>
+                <Text style={{ color: TacticalPalette.accent, fontWeight: "900" }}>Create</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={renameTarget != null} transparent animationType="fade" onRequestClose={() => setRenameTarget(null)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 24 }}>
+          <View
+            style={{
+              backgroundColor: TacticalPalette.elevated,
+              borderRadius: 14,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: TacticalPalette.border,
+              maxWidth: 420,
+              alignSelf: "center",
+              width: "100%",
+            }}>
+            <Text style={{ color: TacticalPalette.bone, fontWeight: "900", fontSize: 16, marginBottom: 10 }}>Rename</Text>
+            <TextInput
+              value={renameDraft}
+              onChangeText={setRenameDraft}
+              placeholder="Name"
+              placeholderTextColor={TacticalPalette.boneMuted}
+              style={{
+                borderWidth: 1,
+                borderColor: TacticalPalette.border,
+                borderRadius: 10,
+                padding: 12,
+                color: TacticalPalette.bone,
+                marginBottom: 14,
+              }}
+            />
+            <View style={{ flexDirection: "row", gap: 14, justifyContent: "flex-end", alignItems: "center" }}>
+              <Pressable onPress={() => setRenameTarget(null)}>
+                <Text style={{ color: TacticalPalette.boneMuted, fontWeight: "800" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  if (!renameTarget) return;
+                  void applyRenameVaultObject(renameTarget, renameDraft);
+                  setRenameTarget(null);
+                }}>
+                <Text style={{ color: TacticalPalette.accent, fontWeight: "900" }}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={moveTarget != null} transparent animationType="fade" onRequestClose={() => setMoveTarget(null)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 24 }}>
+          <View
+            style={{
+              backgroundColor: TacticalPalette.elevated,
+              borderRadius: 14,
+              paddingVertical: 10,
+              borderWidth: 1,
+              borderColor: TacticalPalette.border,
+              maxWidth: 420,
+              alignSelf: "center",
+              width: "100%",
+              maxHeight: "70%",
+            }}>
+            <Text style={{ color: TacticalPalette.bone, fontWeight: "900", fontSize: 16, paddingHorizontal: 16, paddingBottom: 8 }}>
+              Move to…
+            </Text>
+            <FlatList
+              data={moveFolderOptions}
+              keyExtractor={(it, idx) => `${it.id ?? "root"}-${idx}`}
+              renderItem={({ item: opt }) => (
+                <Pressable
+                  onPress={() => {
+                    if (!moveTarget) return;
+                    void moveVaultObject(moveTarget, opt.id);
+                    setMoveTarget(null);
+                  }}
+                  style={{ paddingVertical: 12, paddingHorizontal: 16 }}>
+                  <Text style={{ color: TacticalPalette.bone, fontWeight: "700" }}>{opt.label}</Text>
+                </Pressable>
+              )}
+            />
+            <Pressable onPress={() => setMoveTarget(null)} style={{ padding: 14, alignItems: "center" }}>
+              <Text style={{ color: TacticalPalette.boneMuted, fontWeight: "800" }}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={moreMenuRow != null} transparent animationType="fade" onRequestClose={() => setMoreMenuRow(null)}>
+        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }} onPress={() => setMoreMenuRow(null)}>
+          <View
+            style={{
+              marginTop: 120,
+              marginHorizontal: 24,
+              backgroundColor: TacticalPalette.elevated,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: TacticalPalette.border,
+              overflow: "hidden",
+              maxWidth: 360,
+              alignSelf: "center",
+              width: "100%",
+            }}>
+            {moreMenuRow ? (
+              <>
+                <Pressable
+                  onPress={() => {
+                    const t = remoteMetaById.get(moreMenuRow.id)?.filename ?? "";
+                    setRenameDraft(t);
+                    setRenameTarget(moreMenuRow);
+                    setMoreMenuRow(null);
+                  }}
+                  style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
+                  <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Rename</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    setMoveTarget(moreMenuRow);
+                    setMoreMenuRow(null);
+                  }}
+                  style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
+                  <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Move to…</Text>
+                </Pressable>
+                {driveNav === "trash" ? (
+                  <Pressable
+                    onPress={() => {
+                      void restoreVaultObject(moreMenuRow);
+                      setMoreMenuRow(null);
+                    }}
+                    style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
+                    <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Restore</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => {
+                    if (driveNav === "trash") void deletePrivateVaultObject(moreMenuRow);
+                    else void softTrashVaultObject(moreMenuRow);
+                    setMoreMenuRow(null);
+                  }}
+                  style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
+                  <Text style={{ color: "#e07070", fontWeight: "900" }}>
+                    {driveNav === "trash" ? "Delete forever" : "Move to Trash"}
+                  </Text>
+                </Pressable>
+              </>
+            ) : null}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <VaultLightbox
+        visible={lightbox != null && (lightbox.entries?.length ?? 0) > 0}
+        onClose={() => setLightbox(null)}
+        entries={lightbox?.entries ?? []}
+        initialIndex={lightbox?.index ?? 0}
+        loadDecrypted={loadDecrypted}
+        onDelete={(r) => {
+          const row = r as VaultObjectRow;
+          if (vaultMetaDbFields(pickVaultMetaRow(row)).trashedAt) void deletePrivateVaultObject(row);
+          else void softTrashVaultObject(row);
+        }}
+      />
 
       <Modal visible={teamHubOpen} animationType="fade" transparent onRequestClose={() => setTeamHubOpen(false)}>
         <Pressable style={styles.teamHubBackdrop} onPress={() => setTeamHubOpen(false)}>
@@ -1153,7 +1934,7 @@ export default function VaultScreen() {
               onPress={() => {
                 setTeamHubOpen(false);
                 router.push("/(app)/map");
- }}>
+              }}>
               <FontAwesome name="map" size={16} color={TacticalPalette.bone} style={{ marginRight: 10 }} />
               <Text style={styles.teamHubBtnTx}>Live map</Text>
             </Pressable>
@@ -1194,24 +1975,6 @@ export default function VaultScreen() {
 const styles = StyleSheet.create({
   shell: { flex: 1 },
   driveRowLayout: { flex: 1, flexDirection: "row" },
-  sidebar: { paddingTop: 12, paddingBottom: 20 },
-  sidebarBrand: {
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 1.2,
-    color: TacticalPalette.boneMuted,
-    paddingHorizontal: 14,
-    marginBottom: 8,
-  },
-  sideItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginHorizontal: 4,
-    borderRadius: 8,
-    marginBottom: 4,
-  },
   mainCol: { flex: 1, paddingHorizontal: 16, paddingTop: 12, alignSelf: "stretch", width: "100%" },
   breadcrumb: { fontSize: 12, fontWeight: "600", marginBottom: 10, letterSpacing: 0.2 },
   quickSection: { marginBottom: 12 },
@@ -1283,6 +2046,15 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
     alignItems: "flex-start",
     justifyContent: "flex-start",
+    position: "relative",
+  },
+  gridThumb: {
+    width: "100%",
+    aspectRatio: 1,
+    maxHeight: 140,
+    borderRadius: 10,
+    marginBottom: 10,
+    backgroundColor: "rgba(0,0,0,0.2)",
   },
   gridTitle: { fontSize: 14, fontWeight: "700", width: "100%" },
   gridSub: { fontSize: 13, fontWeight: "800", marginTop: 4, letterSpacing: 0.5 },

@@ -42,6 +42,7 @@ type Props = {
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
+  onLocateRequest?: () => void;
   /** 0–100 Night Ops map darken — scales Leaflet container brightness. */
   mapDimPercent?: number;
   onPinSelect?: (pin: MapPin) => void;
@@ -231,6 +232,7 @@ function TacticalMapLeaflet({
   geomanEnabled = false,
   onPmCreate,
   onMouseMoveLatLng,
+  onLocateRequest,
   gisMapZoom = 10,
   measurePreview = null,
   gisPalette: gisPalettePartial,
@@ -288,6 +290,8 @@ function TacticalMapLeaflet({
   gisZoomRef.current = gisMapZoom;
   const gisPaletteRef = useRef(gisPalette);
   gisPaletteRef.current = gisPalette;
+  const onLocateRequestRef = useRef(onLocateRequest);
+  onLocateRequestRef.current = onLocateRequest;
 
   const applyMapDim = (map: L.Map, dimRaw: number) => {
     const el = map.getContainer();
@@ -355,9 +359,14 @@ function TacticalMapLeaflet({
     const locLink = locateControlLinkRef.current;
     if (locLink) {
       const has = Boolean(userLocRef.current);
-      locLink.style.opacity = has ? "1" : "0.42";
-      locLink.style.cursor = has ? "pointer" : "default";
-      locLink.setAttribute("aria-disabled", has ? "false" : "true");
+      locLink.style.opacity = "1";
+      locLink.style.cursor = "pointer";
+      locLink.setAttribute("aria-disabled", "false");
+      locLink.title = has ? "Zoom to current location" : "Get location / zoom to GPS (allow prompt if asked)";
+      locLink.setAttribute(
+        "aria-label",
+        has ? "Zoom to current location" : "Request location and zoom to GPS",
+      );
     }
   };
 
@@ -387,7 +396,10 @@ function TacticalMapLeaflet({
           L.DomEvent.stopPropagation(e);
           L.DomEvent.preventDefault(e);
           const u = userLocRef.current;
-          if (!u) return;
+          if (!u) {
+            onLocateRequestRef.current?.();
+            return;
+          }
           const z = Math.max(ctrlMap.getZoom(), 15);
           ctrlMap.flyTo([u.lat, u.lng], z, { duration: 1 });
         };
@@ -639,8 +651,22 @@ function TacticalMapLeaflet({
     if (!map) return;
     const fn = (e: L.LeafletMouseEvent) => onMouseMoveRef.current?.(e.latlng.lat, e.latlng.lng);
     map.on("mousemove", fn);
+    const el = map.getContainer();
+    const onTouchMove = (ev: TouchEvent) => {
+      if (!onMouseMoveRef.current || ev.touches.length === 0) return;
+      const t = ev.touches[0];
+      if (!t) return;
+      const rect = el.getBoundingClientRect();
+      const x = t.clientX - rect.left;
+      const y = t.clientY - rect.top;
+      const latlng = map.containerPointToLatLng(L.point(x, y));
+      onMouseMoveRef.current(latlng.lat, latlng.lng);
+    };
+    /** Mobile browsers often omit `mousemove` during drag; keep measure preview + MGRS cursor in sync. */
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
     return () => {
       map.off("mousemove", fn);
+      el.removeEventListener("touchmove", onTouchMove);
     };
   }, []);
 

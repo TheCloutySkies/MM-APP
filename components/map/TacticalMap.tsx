@@ -28,6 +28,8 @@ type Props = {
   pointerMode?: MapPointerMode;
   /** Map center update (used for crosshair coordinate readout). */
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
+  /** Web: user tapped “Zoom to current location” before a GPS fix — trigger a one-shot location read. */
+  onLocateRequest?: () => void;
   /** 0–100: extra darken (Night Ops basemap); 0 disables. */
   mapDimPercent?: number;
   /** Pin tapped (Calcite-style intel panel); when set, Leaflet skips popup for pins. */

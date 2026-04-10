@@ -441,17 +441,31 @@ export default function MapScreen() {
     }
   }, [bufferModal, bufferUnit, bufferRadiusAmount, bufferRadiusTyping]);
 
+  const requestWebLocation = useCallback(() => {
+    if (Platform.OS !== "web" || typeof navigator === "undefined" || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 35_000 },
+    );
+  }, []);
+
   useEffect(() => {
     let nativeSub: { remove: () => void } | null = null;
     let webWatch: number | undefined;
     const run = async () => {
       if (Platform.OS === "web") {
         if (typeof navigator === "undefined" || !navigator.geolocation) return;
-        webWatch = navigator.geolocation.watchPosition(
-          (pos) => setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-          () => {},
-          { enableHighAccuracy: true, maximumAge: 8000 },
-        );
+        const geo = navigator.geolocation;
+        const applyFix = (pos: GeolocationPosition) =>
+          setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        const opts: PositionOptions = {
+          enableHighAccuracy: true,
+          maximumAge: 15_000,
+          timeout: 35_000,
+        };
+        geo.getCurrentPosition(applyFix, () => {}, { ...opts, maximumAge: 0 });
+        webWatch = geo.watchPosition(applyFix, () => {}, opts);
         return;
       }
       const perm = await Location.requestForegroundPermissionsAsync();
@@ -1383,6 +1397,7 @@ export default function MapScreen() {
               geomanEnabled: activeMapTool === "draw",
               onPmCreate: onPmCreateLeaflet,
               onMouseMoveLatLng,
+              onLocateRequest: requestWebLocation,
               gisMapZoom: center?.zoom,
               measurePreview: measurePreviewForMap,
               gisPalette: gisPaletteForMap,

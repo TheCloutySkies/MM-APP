@@ -2,7 +2,29 @@ import type { OpsDocKind } from "@/lib/opsReports";
 
 import { offlineKvGet, offlineKvSet } from "./offlineIdb";
 
-export type VaultObjectRow = { id: string; storage_path: string; created_at: string; folder_id: string | null };
+export type VaultObjectRow = {
+  id: string;
+  storage_path: string | null;
+  vault_partition?: string | null;
+  created_at: string;
+  folder_id: string | null;
+  vault_metadata?:
+    | {
+        encrypted_meta: string;
+        encrypted_thumbnail: string | null;
+        is_folder?: boolean;
+        parent_id?: string | null;
+        trashed_at?: string | null;
+      }
+    | {
+        encrypted_meta: string;
+        encrypted_thumbnail: string | null;
+        is_folder?: boolean;
+        parent_id?: string | null;
+        trashed_at?: string | null;
+      }[]
+    | null;
+};
 
 export type VaultFolderRow = { id: string; parent_id: string | null; encrypted_name: string; created_by: string };
 

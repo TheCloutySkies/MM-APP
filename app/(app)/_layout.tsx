@@ -13,6 +13,7 @@ import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useActivityOutboxFlush } from "@/hooks/useActivityOutboxFlush";
 import { useDeadManMonitor } from "@/hooks/useDeadManMonitor";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
+import { useVaultOutboxFlush } from "@/hooks/useVaultOutboxFlush";
 import { useMMStore } from "@/store/mmStore";
 
 const DESK_COMMS_FAB_W = 120;
@@ -158,6 +159,7 @@ export default function AppLayout() {
   const tabRailHeightPx = useMMStore((s) => s.tabRailHeightPx);
   useDeadManMonitor();
   useActivityOutboxFlush();
+  useVaultOutboxFlush();
 
   const isWebDesk = Platform.OS === "web" && desktopMode;
   const theme = useTacticalChrome();

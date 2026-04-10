@@ -29,7 +29,6 @@ export function TacticalClockBadge() {
 
   return (
     <View
-      pointerEvents="none"
       style={[
         styles.wrap,
         Platform.OS === "web" ? ({ userSelect: "none" } as const) : null,
@@ -49,6 +48,7 @@ const styles = StyleSheet.create({
   wrap: {
     position: "absolute",
     zIndex: 40,
+    pointerEvents: "none",
   },
   text: {
     fontSize: 10,

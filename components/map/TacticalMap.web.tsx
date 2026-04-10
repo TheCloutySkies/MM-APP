@@ -28,6 +28,7 @@ type Props = {
   userLocation?: MapUserLocation | null;
   pointerMode?: MapPointerMode;
   onCenterChange?: (lat: number, lng: number, zoom?: number) => void;
+  onLocateRequest?: () => void;
   mapDimPercent?: number;
   onPinSelect?: (pin: MapPin) => void;
   gisFeatureCollection?: FeatureCollection | null;
