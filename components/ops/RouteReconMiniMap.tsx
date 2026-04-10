@@ -1,6 +1,6 @@
 import * as Location from "expo-location";
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { TacticalMap } from "@/components/map/TacticalMap";
 import type { MapFlyToRequest, MapPin } from "@/components/map/mapTypes";
@@ -22,6 +22,8 @@ function kindTint(kind: RouteReconMarkerKind): string {
 }
 
 export function RouteReconMiniMap({ markers, dropKind, onAddMarker, onSelectMarkerId, scheme }: Props) {
+  const { width: winW } = useWindowDimensions();
+  const mapHeight = winW < 520 ? 220 : 260;
   const [flyTo, setFlyTo] = useState<MapFlyToRequest | null>(null);
 
   useEffect(() => {
@@ -60,7 +62,7 @@ export function RouteReconMiniMap({ markers, dropKind, onAddMarker, onSelectMark
 
   return (
     <View style={[styles.wrap, { borderColor: border }]}>
-      <View style={styles.hintRow}>
+      <View style={[styles.hintRow, winW < 560 ? styles.hintRowStack : null]}>
         <Text style={[styles.hint, { color: scheme === "dark" ? "#a1a1aa" : "#52525b" }]}>
           Tap the map to drop a <Text style={{ fontWeight: "900" }}>{dropKind === "comm_zone" ? "comm zone" : dropKind}</Text>{" "}
           marker. Tap a pin to select it for editing.
@@ -82,7 +84,7 @@ export function RouteReconMiniMap({ markers, dropKind, onAddMarker, onSelectMark
           <Text style={{ color: kindTint(dropKind), fontWeight: "800", fontSize: 12 }}>GPS</Text>
         </Pressable>
       </View>
-      <View style={styles.mapBox}>
+      <View style={[styles.mapBox, { height: mapHeight }]}>
         <TacticalMap
           pins={pins}
           flyTo={flyTo}
@@ -127,7 +129,8 @@ export function RouteReconMiniMap({ markers, dropKind, onAddMarker, onSelectMark
 const styles = StyleSheet.create({
   wrap: { borderWidth: 1, borderRadius: 14, overflow: "hidden", marginBottom: 12 },
   hintRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, paddingVertical: 8 },
-  hint: { flex: 1, fontSize: 12, lineHeight: 17 },
-  recenter: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, borderWidth: 2 },
-  mapBox: { height: 260, width: "100%" },
+  hintRowStack: { flexDirection: "column", alignItems: "stretch" },
+  hint: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 17 },
+  recenter: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, borderWidth: 2, alignSelf: "flex-start" },
+  mapBox: { width: "100%", minHeight: 200 },
 });

@@ -28,6 +28,14 @@ export type TacticalMapPayload = {
   category: TacCategoryId;
   title?: string;
   notes?: string;
+  /** Optional link to an `ops_reports` row (any doc_kind). */
+  linkedOpsReportId?: string;
+  /** Optional link to an `operation_hubs` row. */
+  linkedOperationHubId?: string;
+  /** Optional link to a legacy `missions` row. */
+  linkedLegacyMissionId?: string;
+  /** Short label captured when the operator picks a link (for callout / intel panel). */
+  linkLabel?: string;
   coordinates: { lat: number; lng: number }[];
   droppedAt: number;
   staleHours?: number;
@@ -140,6 +148,10 @@ export function normalizeTacticalPayload(raw: unknown): TacticalMapPayload | nul
       category: (TAC_CATEGORIES.some((x) => x.id === o.category) ? o.category : "other") as TacCategoryId,
       title: typeof o.title === "string" ? o.title : undefined,
       notes: typeof o.notes === "string" ? o.notes : undefined,
+      linkedOpsReportId: typeof o.linkedOpsReportId === "string" ? o.linkedOpsReportId : undefined,
+      linkedOperationHubId: typeof o.linkedOperationHubId === "string" ? o.linkedOperationHubId : undefined,
+      linkedLegacyMissionId: typeof o.linkedLegacyMissionId === "string" ? o.linkedLegacyMissionId : undefined,
+      linkLabel: typeof o.linkLabel === "string" ? o.linkLabel : undefined,
       coordinates,
       droppedAt,
       staleHours: Number.isFinite(staleHours) ? staleHours : 24,
@@ -160,6 +172,10 @@ export function normalizeTacticalPayload(raw: unknown): TacticalMapPayload | nul
     category: mapLegacyType(typ),
     title: typeof o.title === "string" ? o.title : undefined,
     notes: typeof o.notes === "string" ? o.notes : undefined,
+    linkedOpsReportId: typeof o.linkedOpsReportId === "string" ? o.linkedOpsReportId : undefined,
+    linkedOperationHubId: typeof o.linkedOperationHubId === "string" ? o.linkedOperationHubId : undefined,
+    linkedLegacyMissionId: typeof o.linkedLegacyMissionId === "string" ? o.linkedLegacyMissionId : undefined,
+    linkLabel: typeof o.linkLabel === "string" ? o.linkLabel : undefined,
     coordinates: [{ lat, lng }],
     droppedAt,
     staleHours: Number.isFinite(staleHours) ? staleHours : 24,
@@ -167,10 +183,11 @@ export function normalizeTacticalPayload(raw: unknown): TacticalMapPayload | nul
   };
 }
 
-export function formatCreatorSubtitle(createdBy: string, notes?: string): string | undefined {
-  const by = `By ${createdBy}`;
-  if (notes?.trim()) return `${by}\n${notes.trim()}`;
-  return by;
+export function formatCreatorSubtitle(createdBy: string, notes?: string, linkLabel?: string): string | undefined {
+  const parts = [`By ${createdBy}`];
+  if (notes?.trim()) parts.push(notes.trim());
+  if (linkLabel?.trim()) parts.push(`Linked: ${linkLabel.trim()}`);
+  return parts.join("\n");
 }
 
 export function tacticPayloadToLayers(
@@ -183,7 +200,7 @@ export function tacticPayloadToLayers(
   const head = payload.title?.trim() || tacCategoryLabel(payload.category);
   const staleS = stale ? " (stale)" : "";
   const title = `${head}${staleS}`;
-  const subtitle = formatCreatorSubtitle(payload.createdBy, payload.notes);
+  const subtitle = formatCreatorSubtitle(payload.createdBy, payload.notes, payload.linkLabel);
   const pinTint = stale ? "#ca6702" : tint;
 
   if (payload.geom === "point") {

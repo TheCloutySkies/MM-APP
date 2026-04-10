@@ -22,6 +22,7 @@ import {
 import { appendOutbox, loadOutbox, replaceOutbox } from "@/lib/e2ee/localStore";
 import { flushOutboxSequential } from "@/lib/e2ee/outboxSync";
 import { formatSecurityPhrase, securityPhraseFromSpkiPair } from "@/lib/e2ee/securityWords";
+import { isWebSubtleAvailable } from "@/lib/e2ee/subtleWeb";
 import { setTeamGroupKeyBridge } from "@/lib/e2ee/teamGroupKeyBridge";
 import type { E2eeBroadcastV1, E2eeChatMessage, E2eeEnvelopeRow } from "@/lib/e2ee/types";
 import { GLOBAL_GROUP_ID } from "@/lib/e2ee/types";
@@ -34,7 +35,6 @@ import {
     encryptGroupPayload,
     GROUP_REALTIME_TOPIC,
 } from "@/lib/e2ee/wire";
-import { isWebSubtleAvailable } from "@/lib/e2ee/subtleWeb";
 import { useMMStore } from "@/store/mmStore";
 
 function friendlyGroupKeyStatus(raw: string): string {
@@ -104,6 +104,8 @@ export function useLiveComms() {
   /** One decoy email per “halt episode” until flush succeeds again. */
   const decoySentThisHaltRef = useRef(false);
   const mySpkiRef = useRef<string | null>(null);
+  /** Run at most one post-unlock team channel ensure (retryTeamChannel) per vault session. */
+  const teamAutoEnsureOnceRef = useRef(false);
 
   const decoyAlertsEnabled = useMMStore((s) => s.decoyAlertsEnabled);
 
@@ -130,6 +132,7 @@ export function useLiveComms() {
       setOutboxSyncHalted(false);
       setOutboxSyncHaltKind(null);
       decoySentThisHaltRef.current = false;
+      teamAutoEnsureOnceRef.current = false;
       setTeamGroupKeyBridge(null);
     }
   }, [vaultMode]);
@@ -386,69 +389,87 @@ export function useLiveComms() {
     [supabase, profileId, commsMode, activePeerId],
   );
 
-  const loadHistory = useCallback(async () => {
-    if (!supabase || !profileId || !privateKeyRef.current) return;
-    seenRef.current.clear();
-    setMessages([]);
-    if (commsMode === "dm") setChannelRoster([]);
+  const loadHistory = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!supabase || !profileId || !privateKeyRef.current) {
+        if (!opts?.silent) setStatus("Unlock chat first, then reload history.");
+        return;
+      }
+      if (commsMode === "grp" && !groupKeyRef.current) {
+        if (!opts?.silent) {
+          setStatus("Team channel key isn’t ready yet. Tap “Retry team channel” or wait a moment.");
+        }
+        return;
+      }
+      if (commsMode === "dm" && !activePeerId) {
+        if (!opts?.silent) setStatus("Choose someone for direct messages to load that history.");
+        return;
+      }
 
-    if (commsMode === "grp") {
-      const { data } = await supabase
+      seenRef.current.clear();
+      setMessages([]);
+      if (commsMode === "dm") setChannelRoster([]);
+
+      if (commsMode === "grp") {
+        const { data } = await supabase
+          .from("e2ee_comms_envelopes")
+          .select("*")
+          .eq("group_id", GLOBAL_GROUP_ID)
+          .order("created_at", { ascending: true })
+          .limit(800);
+        for (const row of data ?? []) {
+          await applyEnvelopeRow(row as E2eeEnvelopeRow);
+        }
+
+        const { data: rosterRows } = await supabase
+          .from("e2ee_comms_envelopes")
+          .select("sender_id")
+          .eq("group_id", GLOBAL_GROUP_ID)
+          .order("created_at", { ascending: false })
+          .limit(80);
+        const seenSenders = new Set<string>();
+        const ordered: string[] = [];
+        for (const r of rosterRows ?? []) {
+          const sid = r.sender_id as string;
+          if (!sid || seenSenders.has(sid)) continue;
+          seenSenders.add(sid);
+          ordered.push(sid);
+          if (ordered.length >= 12) break;
+        }
+        setChannelRoster(ordered);
+        return;
+      }
+
+      if (!activePeerId) return;
+      const { data: a } = await supabase
         .from("e2ee_comms_envelopes")
         .select("*")
-        .eq("group_id", GLOBAL_GROUP_ID)
+        .eq("sender_id", activePeerId)
+        .eq("recipient_id", profileId)
         .order("created_at", { ascending: true })
         .limit(800);
-      for (const row of data ?? []) {
+      const { data: b } = await supabase
+        .from("e2ee_comms_envelopes")
+        .select("*")
+        .eq("sender_id", profileId)
+        .eq("recipient_id", activePeerId)
+        .order("created_at", { ascending: true })
+        .limit(800);
+      const merged = [...(a ?? []), ...(b ?? [])].sort(
+        (x, y) => new Date(x.created_at).getTime() - new Date(y.created_at).getTime(),
+      );
+      for (const row of merged) {
         await applyEnvelopeRow(row as E2eeEnvelopeRow);
       }
-
-      const { data: rosterRows } = await supabase
-        .from("e2ee_comms_envelopes")
-        .select("sender_id")
-        .eq("group_id", GLOBAL_GROUP_ID)
-        .order("created_at", { ascending: false })
-        .limit(80);
-      const seenSenders = new Set<string>();
-      const ordered: string[] = [];
-      for (const r of rosterRows ?? []) {
-        const sid = r.sender_id as string;
-        if (!sid || seenSenders.has(sid)) continue;
-        seenSenders.add(sid);
-        ordered.push(sid);
-        if (ordered.length >= 12) break;
-      }
-      setChannelRoster(ordered);
-      return;
-    }
-
-    if (!activePeerId) return;
-    const { data: a } = await supabase
-      .from("e2ee_comms_envelopes")
-      .select("*")
-      .eq("sender_id", activePeerId)
-      .eq("recipient_id", profileId)
-      .order("created_at", { ascending: true })
-      .limit(800);
-    const { data: b } = await supabase
-      .from("e2ee_comms_envelopes")
-      .select("*")
-      .eq("sender_id", profileId)
-      .eq("recipient_id", activePeerId)
-      .order("created_at", { ascending: true })
-      .limit(800);
-    const merged = [...(a ?? []), ...(b ?? [])].sort(
-      (x, y) => new Date(x.created_at).getTime() - new Date(y.created_at).getTime(),
-    );
-    for (const row of merged) {
-      await applyEnvelopeRow(row as E2eeEnvelopeRow);
-    }
-  }, [supabase, profileId, commsMode, activePeerId, applyEnvelopeRow]);
+    },
+    [supabase, profileId, commsMode, activePeerId, applyEnvelopeRow],
+  );
 
   useEffect(() => {
     if (!unlocked || !cryptoOk) return;
-    void loadHistory();
-  }, [unlocked, cryptoOk, loadHistory, groupChannelReady]);
+    if (commsMode === "grp" && !groupChannelReady) return;
+    void loadHistory({ silent: true });
+  }, [unlocked, cryptoOk, loadHistory, groupChannelReady, commsMode]);
 
   useEffect(() => {
     if (!supabase || !profileId || !unlocked || !cryptoOk) {
@@ -656,10 +677,20 @@ export function useLiveComms() {
         return { ok: false, message: error?.message ?? "Unlock failed" };
       }
       privateKeyRef.current = privateKey;
+      if (supabase) {
+        const { error: rpcErr } = await supabase.rpc("mm_ensure_e2ee_bootstrap_admin");
+        if (rpcErr && __DEV__) {
+          console.warn("[comms] mm_ensure_e2ee_bootstrap_admin", rpcErr.message);
+        }
+      }
       await refreshMySpki();
       await syncGroupKey();
       if (!groupKeyRef.current) {
         await createGlobalChannel();
+      }
+      if (!groupKeyRef.current && supabase && profileId && !teamAutoEnsureOnceRef.current) {
+        teamAutoEnsureOnceRef.current = true;
+        await retryTeamChannel();
       }
       if (supabase && profileId) {
         const admin = await isGroupAdmin(supabase, profileId);
@@ -668,9 +699,20 @@ export function useLiveComms() {
       await loadDirectory();
       setUnlocked(true);
       void flushOutboxWithUi();
+      void loadHistory({ silent: true });
       return { ok: true };
     },
-    [profileId, refreshMySpki, syncGroupKey, createGlobalChannel, supabase, loadDirectory, flushOutboxWithUi],
+    [
+      profileId,
+      refreshMySpki,
+      syncGroupKey,
+      createGlobalChannel,
+      retryTeamChannel,
+      supabase,
+      loadDirectory,
+      flushOutboxWithUi,
+      loadHistory,
+    ],
   );
 
   const unlockComms = useCallback(async () => {
@@ -784,7 +826,7 @@ export function useLiveComms() {
   }, []);
 
   const reloadChatHistory = useCallback(() => {
-    void loadHistory();
+    void loadHistory({ silent: false });
   }, [loadHistory]);
 
   const sendPriorityEmail = useCallback(

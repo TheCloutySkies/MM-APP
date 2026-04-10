@@ -9,9 +9,11 @@ import {
     StyleSheet,
     Text,
     TextInput,
+    useWindowDimensions,
     View,
 } from "react-native";
 
+import { opsModalContentExtras } from "@/components/ops/opsModalScroll";
 import Colors from "@/constants/Colors";
 import { encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { OPS_AAD, type AarPayloadV1 } from "@/lib/opsReports";
@@ -41,6 +43,7 @@ export function AarModal({
   operationId = null,
 }: Props) {
   const p = Colors[scheme];
+  const { width: winW } = useWindowDimensions();
   const [operationTitle, setOperationTitle] = useState("");
   const [dateRange, setDateRange] = useState("");
   const [missionObjectives, setMissionObjectives] = useState("");
@@ -110,7 +113,7 @@ export function AarModal({
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={[styles.wrap, { backgroundColor: p.background }]}
+        style={[styles.wrap, { backgroundColor: p.background, minHeight: 0 }]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={styles.header}>
           <Text style={[styles.headerTitle, { color: p.text }]}>After action report</Text>
@@ -119,8 +122,8 @@ export function AarModal({
           </Pressable>
         </View>
         <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          style={[styles.scroll, { minHeight: 0 }]}
+          contentContainerStyle={[styles.scrollContent, opsModalContentExtras(winW, 40)]}
           keyboardShouldPersistTaps="handled">
           <Text style={[styles.hint, { color: p.tabIconDefault }]}>
             Structured AAR: objectives, execution, strengths, deficiencies, lessons, recommendations. Saved for the team
@@ -232,7 +235,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: "800" },
   close: { fontSize: 17, fontWeight: "700" },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 40 },
+  scrollContent: { paddingBottom: 0 },
   hint: { fontSize: 12, lineHeight: 17, marginBottom: 10 },
   label: { fontSize: 11, fontWeight: "700", marginTop: 10, letterSpacing: 0.4 },
   input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15, marginBottom: 2 },

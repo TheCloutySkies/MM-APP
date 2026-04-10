@@ -13,6 +13,7 @@ import {
     useWindowDimensions,
 } from "react-native";
 
+import { InfoHint } from "@/components/chrome/InfoHint";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { base64ToBytes, bytesToBase64, hexToBytes, utf8, utf8decode } from "@/lib/crypto/bytes";
@@ -297,7 +298,7 @@ function MethodsAtAGlancePanel(props: {
   return (
     <View style={styles.methodsAtAGlanceWrap}>
       <ScrollView
-        style={styles.methodsAtAGlanceScroll}
+        style={[styles.methodsAtAGlanceScroll, { flex: 1, minHeight: 0 }]}
         contentContainerStyle={styles.methodsAtAGlanceContent}
         nestedScrollEnabled
         keyboardShouldPersistTaps="handled">
@@ -331,8 +332,9 @@ function MethodsAtAGlancePanel(props: {
 export default function SignalsScreen() {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const desktopSplit = Platform.OS === "web" && width >= 980;
+  const guideMaxH = Math.min(360, Math.round(height * 0.44));
 
   const [mode, setMode] = useState<Mode>("encode");
   const [tab, setTab] = useState<SignalTabId>("aes");
@@ -371,9 +373,35 @@ export default function SignalsScreen() {
     closeModeMenus();
   };
 
+  const openCiphersHelpMenu = () => {
+    closeModeMenus();
+    Alert.alert(
+      "Ciphers help",
+      "Open a full method comparison or the detailed guide for the tool you selected.",
+      [
+        {
+          text: "Method comparison",
+          onPress: () => {
+            setMethodReferenceOpen(true);
+            setGuideOpen(false);
+          },
+        },
+        {
+          text: "Quick guide (this tool)",
+          onPress: () => {
+            setMethodReferenceOpen(false);
+            setGuideOpen(true);
+          },
+        },
+        { text: "Cancel", style: "cancel" },
+      ],
+    );
+  };
+
   const paneStyle = desktopSplit ? styles.splitRow : styles.splitCol;
   const opPaneStyle = desktopSplit ? styles.leftPane : styles.topPane;
   const guidePaneStyle = desktopSplit ? styles.rightPane : styles.bottomPane;
+  const stackedGuide = !desktopSplit && guideOpen;
 
   return (
     <View style={[styles.screen, { backgroundColor: p.background }]}>
@@ -385,10 +413,16 @@ export default function SignalsScreen() {
         />
       )}
       <View style={[styles.head, { borderBottomColor: TacticalPalette.border }]}>
-        <Text style={[styles.h1, { color: p.text }]}>Ciphers</Text>
-        <Text style={[styles.sub, { color: p.tabIconDefault }]}>
-          Client-side only. Copy/paste bundles for off-grid use.
-        </Text>
+        <View style={styles.headTitleRow}>
+          <Text style={[styles.h1, { color: p.text }]}>Ciphers</Text>
+          <InfoHint
+            title="Ciphers"
+            webTitle="Client-side only. Use the help menu on phones for long reference text."
+            message="All processing stays on-device. Use Encode/Decode to pick a method; open Help on small screens for the full comparison and per-tool guide."
+            tint={p.tabIconDefault}
+          />
+        </View>
+        <Text style={[styles.sub, { color: p.tabIconDefault }]}>Client-side tools — copy/paste bundles off-grid.</Text>
       </View>
 
       <View style={[styles.modeMenuBar, { borderBottomColor: TacticalPalette.border }]}>
@@ -515,43 +549,54 @@ export default function SignalsScreen() {
           ) : null}
         </View>
 
-        <Pressable
-          onPress={() => {
-            closeModeMenus();
-            if (methodReferenceOpen) {
-              setMethodReferenceOpen(false);
-            } else {
-              setMethodReferenceOpen(true);
-              setGuideOpen(false);
-            }
-          }}
-          style={[
-            styles.guideToggle,
-            { borderColor: methodReferenceOpen ? p.tint : p.tabIconDefault },
-          ]}
-          accessibilityLabel={methodReferenceOpen ? "Close method reference" : "Open method reference"}>
-          <Text
-            style={[styles.guideToggleTx, { color: methodReferenceOpen ? p.tint : p.tabIconDefault }]}>
-            {methodReferenceOpen ? "Tool" : "Reference"}
-          </Text>
-        </Pressable>
+        {desktopSplit ? (
+          <>
+            <Pressable
+              onPress={() => {
+                closeModeMenus();
+                if (methodReferenceOpen) {
+                  setMethodReferenceOpen(false);
+                } else {
+                  setMethodReferenceOpen(true);
+                  setGuideOpen(false);
+                }
+              }}
+              style={[
+                styles.guideToggle,
+                { borderColor: methodReferenceOpen ? p.tint : p.tabIconDefault },
+              ]}
+              accessibilityLabel={methodReferenceOpen ? "Close method reference" : "Open method reference"}>
+              <Text
+                style={[styles.guideToggleTx, { color: methodReferenceOpen ? p.tint : p.tabIconDefault }]}>
+                {methodReferenceOpen ? "Tool" : "Reference"}
+              </Text>
+            </Pressable>
 
-        <Pressable
-          onPress={() => {
-            closeModeMenus();
-            if (methodReferenceOpen) setMethodReferenceOpen(false);
-            setGuideOpen((v) => !v);
-          }}
-          style={[
-            styles.guideToggle,
-            { borderColor: guideOpen ? p.tint : p.tabIconDefault },
-          ]}
-          accessibilityLabel={guideOpen ? "Hide quick guide" : "Show quick guide"}>
-          <Text
-            style={[styles.guideToggleTx, { color: guideOpen ? p.tint : p.tabIconDefault }]}>
-            {guideOpen ? "Hide guide" : "Quick guide"}
-          </Text>
-        </Pressable>
+            <Pressable
+              onPress={() => {
+                closeModeMenus();
+                if (methodReferenceOpen) setMethodReferenceOpen(false);
+                setGuideOpen((v) => !v);
+              }}
+              style={[
+                styles.guideToggle,
+                { borderColor: guideOpen ? p.tint : p.tabIconDefault },
+              ]}
+              accessibilityLabel={guideOpen ? "Hide quick guide" : "Show quick guide"}>
+              <Text style={[styles.guideToggleTx, { color: guideOpen ? p.tint : p.tabIconDefault }]}>
+                {guideOpen ? "Hide guide" : "Quick guide"}
+              </Text>
+            </Pressable>
+          </>
+        ) : (
+          <Pressable
+            onPress={openCiphersHelpMenu}
+            style={[styles.guideToggle, { borderColor: p.tabIconDefault, flexDirection: "row", gap: 8 }]}
+            accessibilityLabel="Open ciphers help and reference">
+            <FontAwesome name="info-circle" size={14} color={p.tint} />
+            <Text style={[styles.guideToggleTx, { color: p.text }]}>Help</Text>
+          </Pressable>
+        )}
       </View>
 
       <View style={styles.mainWorkspace}>
@@ -572,7 +617,9 @@ export default function SignalsScreen() {
                 {
                   borderRightColor: TacticalPalette.border,
                   borderBottomColor: TacticalPalette.border,
-                  minHeight: 0,
+                  minHeight: stackedGuide ? 140 : 0,
+                  flex: 1,
+                  flexShrink: 1,
                 },
               ]}>
               {tab === "aes" ? <AesPane mode={mode} /> : null}
@@ -584,11 +631,18 @@ export default function SignalsScreen() {
             </View>
 
             {guideOpen ? (
-              <View style={[guidePaneStyle, desktopSplit ? null : { minHeight: 0 }]}>
+              <View
+                style={[
+                  guidePaneStyle,
+                  desktopSplit ? null : { minHeight: 0, maxHeight: guideMaxH, flexGrow: 0, flexShrink: 1 },
+                ]}>
                 <View style={[styles.guideHead, { borderBottomColor: TacticalPalette.border }]}>
                   <Text style={[styles.guideTitle, { color: p.text }]}>{guide.title}</Text>
                 </View>
-                <ScrollView contentContainerStyle={styles.guideBody}>
+                <ScrollView
+                  style={{ flex: 1, minHeight: 0 }}
+                  contentContainerStyle={styles.guideBody}
+                  keyboardShouldPersistTaps="handled">
                   <Text style={[styles.guideText, { color: p.tabIconDefault }]}>{guide.body}</Text>
                 </ScrollView>
               </View>
@@ -609,7 +663,10 @@ function AesPane({ mode }: { mode: Mode }) {
   const [out, setOut] = useState("");
 
   return (
-    <ScrollView contentContainerStyle={styles.panePad} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={{ flex: 1, minHeight: 0 }}
+      contentContainerStyle={styles.panePad}
+      keyboardShouldPersistTaps="handled">
       <Text style={[styles.paneTitle, { color: p.text }]}>AES-256-GCM</Text>
       <Text style={[styles.paneHint, { color: p.tabIconDefault }]}>
         Passphrase → PBKDF2 key → AES-GCM. Output is copy/paste JSON.
@@ -771,7 +828,10 @@ function WhisperPane({ mode }: { mode: Mode }) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.panePad} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={{ flex: 1, minHeight: 0 }}
+      contentContainerStyle={styles.panePad}
+      keyboardShouldPersistTaps="handled">
       <Text style={[styles.paneTitle, { color: p.text }]}>Asymmetric (Whisper)</Text>
       <Text style={[styles.paneHint, { color: p.tabIconDefault }]}>
         ECDH P-384 derives a shared secret, then AES-256-GCM encrypts. Private key is stored in IndexedDB encrypted by your
@@ -953,7 +1013,10 @@ function OtpPane() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.panePad} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={{ flex: 1, minHeight: 0 }}
+      contentContainerStyle={styles.panePad}
+      keyboardShouldPersistTaps="handled">
       <Text style={[styles.paneTitle, { color: p.text }]}>One-Time Pad (Analog)</Text>
       <Text style={[styles.paneHint, { color: p.tabIconDefault }]}>
         Generates A–Z pads in 5-letter groups using crypto.getRandomValues(). Print and store physically. Never reuse.
@@ -1066,7 +1129,10 @@ function CompressorPane() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.panePad} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={{ flex: 1, minHeight: 0 }}
+      contentContainerStyle={styles.panePad}
+      keyboardShouldPersistTaps="handled">
       <Text style={[styles.paneTitle, { color: p.text }]}>Radio / Mesh Compressor</Text>
       <Text style={[styles.paneHint, { color: p.tabIconDefault }]}>
         Shrinks plain English for constrained links. Meter turns red above 220 bytes.
@@ -1227,7 +1293,10 @@ function StegoPane({ mode }: { mode: Mode }) {
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.panePad} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={{ flex: 1, minHeight: 0 }}
+      contentContainerStyle={styles.panePad}
+      keyboardShouldPersistTaps="handled">
       <Text style={[styles.paneTitle, { color: p.text }]}>Steganography (LSB)</Text>
       <Text style={[styles.paneHint, { color: p.tabIconDefault }]}>
         Conceal text inside a PNG’s RGB least-significant bits. Not a substitute for encryption.
@@ -1376,7 +1445,10 @@ function LegacyPane({ mode }: { mode: Mode }) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.panePad} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={{ flex: 1, minHeight: 0 }}
+      contentContainerStyle={styles.panePad}
+      keyboardShouldPersistTaps="handled">
       <Text style={[styles.paneTitle, { color: p.text }]}>Field encodings</Text>
       <View style={styles.rowWrap}>
         {[
@@ -1506,6 +1578,7 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
   head: { padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, zIndex: 2 },
+  headTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   h1: { fontSize: 22, fontWeight: "800" },
   sub: { marginTop: 4, fontSize: 12, lineHeight: 16 },
   mainWorkspace: { flex: 1, minHeight: 0 },

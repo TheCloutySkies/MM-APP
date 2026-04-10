@@ -2,28 +2,30 @@ import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  useWindowDimensions,
-  View,
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    useWindowDimensions,
+    View,
 } from "react-native";
 
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
-import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import { encryptUtf8 } from "@/lib/crypto/aesGcm";
+import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import { OPS_AAD, type RouteReconMarkerKind, type RouteReconMarkerV1, type RouteReconPayloadV1 } from "@/lib/opsReports";
 import { useMMStore } from "@/store/mmStore";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { TacticalSandTableModal } from "@/components/sand-table/TacticalSandTableModal";
+
+import { opsModalContentExtras } from "@/components/ops/opsModalScroll";
 
 import { RouteReconMiniMap } from "./RouteReconMiniMap";
 
@@ -58,9 +60,11 @@ export function RouteReconModal({
   const setMgrsPickHandler = useMMStore((s) => s.setMgrsPickHandler);
   const p = Colors[scheme];
   const { width: winW } = useWindowDimensions();
-  const rowLayout = winW >= 760;
+  /** Side-by-side form + map only on large web viewports; native / phones always stack (avoids overlap in landscape). */
+  const rowLayout = Platform.OS === "web" && winW >= 960;
 
   const [routeName, setRouteName] = useState("");
+  const [routeDescription, setRouteDescription] = useState("");
   const [startMgrs, setStartMgrs] = useState("");
   const [endMgrs, setEndMgrs] = useState("");
   const [markers, setMarkers] = useState<RouteReconMarkerV1[]>([]);
@@ -146,6 +150,7 @@ export function RouteReconModal({
         routeName: routeName.trim(),
         startMgrs: startMgrs.trim(),
         endMgrs: endMgrs.trim(),
+        ...(routeDescription.trim() ? { description: routeDescription.trim() } : {}),
         markers,
         createdAt: Date.now(),
         ...(sandTableGeoJsonCipher ? { sandTableGeoJsonCipher } : {}),
@@ -184,14 +189,37 @@ export function RouteReconModal({
     );
   };
 
-  const formPanel = (
-    <View style={{ flex: 1, minWidth: 280 }}>
+  const formColStyle = rowLayout
+    ? ({ flex: 1, minWidth: 0, minHeight: 0 } as const)
+    : ({ width: "100%" as const, alignSelf: "stretch" } as const);
+  const mapColStyle = rowLayout
+    ? ({ flex: 1, minWidth: 0, minHeight: 0 } as const)
+    : ({ width: "100%" as const, alignSelf: "stretch" } as const);
+
+  const closeAll = () => {
+    setShowSandTable(false);
+    onClose();
+  };
+
+  const formTop = (
+    <View style={formColStyle}>
       <Text style={[styles.hint, { color: p.tabIconDefault }]}>
         Document a trail for follow-on teams: grids, hazards/choke points, bridges, and where comms holds up.
       </Text>
 
       <Text style={[styles.label, { color: p.tabIconDefault }]}>Route name / ID</Text>
       <TextInput placeholderTextColor="#888" value={routeName} onChangeText={setRouteName} style={inputStyle} />
+
+      <Text style={[styles.label, { color: p.tabIconDefault }]}>Description (optional)</Text>
+      <TextInput
+        placeholderTextColor="#888"
+        value={routeDescription}
+        onChangeText={setRouteDescription}
+        placeholder="Overall notes, intent, trafficability…"
+        style={[inputStyle, styles.tall]}
+        multiline
+        textAlignVertical="top"
+      />
 
       <Text style={[styles.label, { color: p.tabIconDefault }]}>Start (MGRS)</Text>
       <TextInput placeholderTextColor="#888" value={startMgrs} onChangeText={setStartMgrs} style={inputStyle} />
@@ -234,7 +262,9 @@ export function RouteReconModal({
         style={[styles.sandBtn, { borderColor: TacticalPalette.accent }]}>
         <Text style={{ color: TacticalPalette.accent, fontWeight: "900", fontSize: 14 }}>Open Sand Table editor</Text>
         <Text style={{ color: p.tabIconDefault, fontSize: 12, marginTop: 6, lineHeight: 17 }}>
-          Fullscreen sandbox map — exports encrypted GeoJSON + PNG into this report (web).
+          {Platform.OS === "web"
+            ? "Opens full-screen editor. This form pauses while the sand table is open (avoids nested modals on mobile web)."
+            : "Available on MM Web only. Use the mini-map below to sketch markers here."}
         </Text>
       </Pressable>
       {sandTableGeoJsonCipher && sandTablePngCipher ? (
@@ -249,7 +279,11 @@ export function RouteReconModal({
         {dropChip("choke", "Hazard")}
         {dropChip("comm_zone", "Comm")}
       </View>
+    </View>
+  );
 
+  const formBottom = (
+    <View style={formColStyle}>
       {selected && selected.kind === "bridge" ? (
         <View style={[styles.editor, { borderColor: scheme === "dark" ? "#3f3f46" : "#d4d4d8" }]}>
           <Text style={[styles.editorTitle, { color: p.text }]}>Bridge details</Text>
@@ -351,7 +385,7 @@ export function RouteReconModal({
   );
 
   const mapPanel = (
-    <View style={{ flex: 1, minWidth: 280 }}>
+    <View style={mapColStyle}>
       <RouteReconMiniMap
         markers={markers}
         dropKind={dropKind}
@@ -367,19 +401,41 @@ export function RouteReconModal({
 
   return (
     <>
-      <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <Modal visible={visible && !showSandTable} animationType="slide" onRequestClose={closeAll}>
         <KeyboardAvoidingView
-          style={[styles.wrap, { backgroundColor: p.background }]}
+          style={[styles.wrap, { backgroundColor: p.background, minHeight: 0 }]}
           behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.header}>
-            <Text style={[styles.title, { color: p.text }]}>Route reconnaissance</Text>
-            <Pressable onPress={onClose} hitSlop={12}>
+            <Text style={[styles.title, { color: p.text, flex: 1, minWidth: 0 }]} numberOfLines={2}>
+              Route reconnaissance
+            </Text>
+            <Pressable onPress={closeAll} hitSlop={12}>
               <Text style={[styles.close, { color: p.tint }]}>Close</Text>
             </Pressable>
           </View>
-          <ScrollView contentContainerStyle={[styles.body, rowLayout ? styles.bodyRow : undefined]} keyboardShouldPersistTaps="handled">
-            {formPanel}
-            {mapPanel}
+          <ScrollView
+            style={{ flex: 1, minHeight: 0 }}
+            contentContainerStyle={[
+              styles.body,
+              rowLayout ? styles.bodyRow : styles.bodyColumn,
+              opsModalContentExtras(winW, 40),
+            ]}
+            keyboardShouldPersistTaps="handled">
+            {rowLayout ? (
+              <>
+                <View style={styles.rowGroup}>
+                  {formTop}
+                  {formBottom}
+                </View>
+                {mapPanel}
+              </>
+            ) : (
+              <>
+                {formTop}
+                {mapPanel}
+                {formBottom}
+              </>
+            )}
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
@@ -400,11 +456,26 @@ export function RouteReconModal({
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, paddingTop: Platform.OS === "ios" ? 54 : 28 },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    gap: 12,
+  },
   title: { fontSize: 20, fontWeight: "800" },
   close: { fontSize: 17, fontWeight: "700" },
-  body: { padding: 16, paddingBottom: 40, gap: 16 },
+  body: { paddingTop: 0, paddingBottom: 0, gap: 16 },
+  bodyColumn: { flexDirection: "column", alignItems: "stretch" },
   bodyRow: { flexDirection: "row", alignItems: "flex-start", gap: 16 },
+  rowGroup: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    gap: 16,
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
   hint: { fontSize: 12, lineHeight: 17, marginBottom: 10 },
   label: { fontSize: 11, fontWeight: "700", marginTop: 10 },
   kicker: { fontSize: 12, fontWeight: "900", letterSpacing: 0.6, marginTop: 14, marginBottom: 8 },

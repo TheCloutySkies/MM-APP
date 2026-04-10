@@ -360,6 +360,20 @@ export default function VaultScreen() {
     [supabase, profileId],
   );
 
+  const refreshCurrentDrive = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (section === "private") {
+        await reloadQueued();
+        await refreshPrivate();
+      } else {
+        await refreshOps(section);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [section, reloadQueued, refreshPrivate, refreshOps]);
+
   const refresh = useCallback(async () => {
     if (section === "private") await refreshPrivate();
     else await refreshOps(section);
@@ -506,15 +520,16 @@ export default function VaultScreen() {
             localPreviewDataUrl: previewUrl ?? null,
           },
         );
-        setUploadingRows((prev) => prev.filter((r) => r.uploadId !== uploadId));
         if (!res.ok) {
+          setUploadingRows((prev) => prev.filter((r) => r.uploadId !== uploadId));
           Alert.alert("Couldn't add this file", res.error);
           break;
         }
         if (res.ok && !res.queued) void logAction("VAULT_FILE", res.objectId);
+        await reloadQueued();
+        await refreshPrivate();
+        setUploadingRows((prev) => prev.filter((r) => r.uploadId !== uploadId));
       }
-      await reloadQueued();
-      void refreshPrivate();
     } finally {
       setUploadBusy(false);
     }
@@ -789,9 +804,14 @@ export default function VaultScreen() {
 
   const privateDriveData = useMemo((): DriveRow[] => {
     const uploadingItems: DriveRow[] = uploadingRows
-      .filter(
-        (u) => driveNav === "my" && (u.parentVaultObjectId ?? null) === (currentFolderId ?? null),
-      )
+      .filter((u) => {
+        if (section !== "private" || driveNav === "trash") return false;
+        if (driveNav === "my")
+          return (u.parentVaultObjectId ?? null) === (currentFolderId ?? null);
+        /* Recent: show in-progress uploads (folder context is cleared on that nav). */
+        if (driveNav === "recent") return true;
+        return false;
+      })
       .map((u): DriveRow => ({ ...u }));
     const sortedItems = [...privateListMerged].sort((a, b) => {
       const fa =
@@ -812,7 +832,7 @@ export default function VaultScreen() {
       return na.localeCompare(nb, undefined, { sensitivity: "base" });
     });
     return [...uploadingItems, ...sortedItems];
-  }, [uploadingRows, privateListMerged, driveNav, currentFolderId, remoteMetaById]);
+  }, [section, uploadingRows, privateListMerged, driveNav, currentFolderId, remoteMetaById]);
 
   const privateEmptyMessage = useMemo(() => {
     switch (driveNav) {
@@ -1554,6 +1574,18 @@ export default function VaultScreen() {
             {loading ? " · …" : ""}
           </Text>
 
+          {section === "private" && uploadBusy ? (
+            <View style={[styles.uploadBanner, { borderColor: borderM, backgroundColor: TacticalPalette.panel }]}>
+              <ActivityIndicator color={TacticalPalette.accent} style={{ marginRight: 10 }} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.uploadBannerTitle, { color: p.text }]}>Working on your upload…</Text>
+                <Text style={[styles.uploadBannerSub, { color: p.tabIconDefault }]}>
+                  Encrypting and saving to Team drive. This can take a moment for large files.
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           {section === "private" ? (
             <View
               style={{
@@ -1571,6 +1603,31 @@ export default function VaultScreen() {
                   {Platform.OS === "web" ? "Double-click to open · right for more" : "Tap to open · ⋮ for more"}
                 </Text>
               </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Refresh drive"
+                onPress={() => void refreshCurrentDrive()}
+                disabled={refreshing}
+                style={({ pressed }) => [
+                  styles.refreshBtn,
+                  {
+                    opacity: refreshing ? 0.6 : pressed ? 0.88 : 1,
+                    borderColor: borderM,
+                    backgroundColor: surface,
+                  },
+                ]}>
+                {refreshing ? (
+                  <>
+                    <ActivityIndicator size="small" color={p.tint} style={{ marginRight: 8 }} />
+                    <Text style={{ color: p.text, fontWeight: "800", fontSize: 12 }}>Refreshing…</Text>
+                  </>
+                ) : (
+                  <>
+                    <FontAwesome name="refresh" size={16} color={p.tint} style={{ marginRight: 6 }} />
+                    <Text style={{ color: p.text, fontWeight: "800", fontSize: 12 }}>Refresh</Text>
+                  </>
+                )}
+              </Pressable>
               <View style={styles.viewToggle}>
                 <Pressable
                   onPress={() => void setVaultDriveViewMode("list")}
@@ -1607,6 +1664,19 @@ export default function VaultScreen() {
                   <Text style={{ color: p.tint, fontWeight: "700" }}>Clear</Text>
                 </Pressable>
               ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Refresh folder"
+                onPress={() => void refreshCurrentDrive()}
+                disabled={refreshing}
+                hitSlop={8}
+                style={({ pressed }) => [{ padding: 8, opacity: refreshing || pressed ? 0.7 : 1 }]}>
+                {refreshing ? (
+                  <ActivityIndicator size="small" color={p.tint} />
+                ) : (
+                  <FontAwesome name="refresh" size={18} color={p.tint} />
+                )}
+              </Pressable>
             </View>
           )}
 
@@ -1622,24 +1692,53 @@ export default function VaultScreen() {
           ) : null}
 
           <View style={styles.toolbar}>
-            {section === "private" ? <View style={{ flex: 1 }} /> : (
-              <View style={styles.viewToggle}>
+            {section === "private" ? (
+              <View style={{ flex: 1 }} />
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
                 <Pressable
-                  onPress={() => void setVaultDriveViewMode("list")}
-                  style={[
-                    styles.viewBtn,
-                    viewMode === "list" && { backgroundColor: TacticalPalette.panel },
+                  accessibilityRole="button"
+                  accessibilityLabel="Refresh folder"
+                  onPress={() => void refreshCurrentDrive()}
+                  disabled={refreshing}
+                  style={({ pressed }) => [
+                    styles.refreshBtn,
+                    {
+                      opacity: refreshing ? 0.6 : pressed ? 0.88 : 1,
+                      borderColor: borderM,
+                      backgroundColor: surface,
+                    },
                   ]}>
-                  <FontAwesome name="list" size={16} color={p.text} />
+                  {refreshing ? (
+                    <>
+                      <ActivityIndicator size="small" color={p.tint} style={{ marginRight: 8 }} />
+                      <Text style={{ color: p.text, fontWeight: "800", fontSize: 12 }}>Refreshing…</Text>
+                    </>
+                  ) : (
+                    <>
+                      <FontAwesome name="refresh" size={16} color={p.tint} style={{ marginRight: 6 }} />
+                      <Text style={{ color: p.text, fontWeight: "800", fontSize: 12 }}>Refresh</Text>
+                    </>
+                  )}
                 </Pressable>
-                <Pressable
-                  onPress={() => void setVaultDriveViewMode("grid")}
-                  style={[
-                    styles.viewBtn,
-                    viewMode === "grid" && { backgroundColor: TacticalPalette.panel },
-                  ]}>
-                  <FontAwesome name="th-large" size={16} color={p.text} />
-                </Pressable>
+                <View style={styles.viewToggle}>
+                  <Pressable
+                    onPress={() => void setVaultDriveViewMode("list")}
+                    style={[
+                      styles.viewBtn,
+                      viewMode === "list" && { backgroundColor: TacticalPalette.panel },
+                    ]}>
+                    <FontAwesome name="list" size={16} color={p.text} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void setVaultDriveViewMode("grid")}
+                    style={[
+                      styles.viewBtn,
+                      viewMode === "grid" && { backgroundColor: TacticalPalette.panel },
+                    ]}>
+                    <FontAwesome name="th-large" size={16} color={p.text} />
+                  </Pressable>
+                </View>
               </View>
             )}
             {section === "private" ? (
@@ -1684,12 +1783,7 @@ export default function VaultScreen() {
               columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
               ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
               refreshing={refreshing}
-              onRefresh={async () => {
-                setRefreshing(true);
-                await reloadQueued();
-                await refreshPrivate();
-                setRefreshing(false);
-              }}
+              onRefresh={() => void refreshCurrentDrive()}
               ListEmptyComponent={
                 <Text style={[styles.empty, { color: p.tabIconDefault }]}>{privateEmptyMessage}</Text>
               }
@@ -1705,11 +1799,7 @@ export default function VaultScreen() {
               columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
               ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
               refreshing={refreshing}
-              onRefresh={async () => {
-                setRefreshing(true);
-                await refreshOps(section);
-                setRefreshing(false);
-              }}
+              onRefresh={() => void refreshCurrentDrive()}
               ListEmptyComponent={
                 <Text style={[styles.empty, { color: p.tabIconDefault }]}>{emptyCopy}</Text>
               }
@@ -1977,6 +2067,25 @@ const styles = StyleSheet.create({
   driveRowLayout: { flex: 1, flexDirection: "row" },
   mainCol: { flex: 1, paddingHorizontal: 16, paddingTop: 12, alignSelf: "stretch", width: "100%" },
   breadcrumb: { fontSize: 12, fontWeight: "600", marginBottom: 10, letterSpacing: 0.2 },
+  uploadBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  uploadBannerTitle: { fontSize: 14, fontWeight: "800" },
+  uploadBannerSub: { fontSize: 12, marginTop: 4, lineHeight: 17 },
+  refreshBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
   quickSection: { marginBottom: 12 },
   quickLabel: { fontSize: 11, fontWeight: "700", marginBottom: 8, letterSpacing: 0.6 },
   quickRow: { flexDirection: "row", gap: 10, paddingBottom: 4 },

@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from "react-native";
 
+import { InfoHint } from "@/components/chrome/InfoHint";
 import { AarModal } from "@/components/ops/AarModal";
 import { IntelReportModal } from "@/components/ops/IntelReportModal";
 import { MedevacNineLineModal } from "@/components/ops/MedevacNineLineModal";
@@ -52,10 +53,18 @@ export default function ReportsScreen() {
     <View style={[styles.wrap, { backgroundColor: p.background }]}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={[styles.kicker, { color: p.tabIconDefault }]}>FIELD REPORTS</Text>
-        <Text style={[styles.lede, { color: p.text }]}>
-          File SITREPs, AARs, target packages, and intel reports. Tie them to an operation from{" "}
-          <Text style={{ fontWeight: "700" }}>Missions</Text> or an operation dashboard so everything lands in one place.
-        </Text>
+        <View style={styles.ledeRow}>
+          <Text style={[styles.lede, { color: p.text, flex: 1 }]}>
+            Encrypted SITREPs, AARs, target packages, and intel. Open <Text style={{ fontWeight: "700" }}>Missions</Text>{" "}
+            to tie a report to an operation.
+          </Text>
+          <InfoHint
+            title="Field reports"
+            webTitle="Reports use your team ops key after the vault is unlocked."
+            message="Payloads are encrypted client-side with the shared operations key (same family as map tools). Unlock the vault on this device before filing. Longer explanations and classification reminders live in each form."
+            tint={p.tabIconDefault}
+          />
+        </View>
 
         {/*
           Avoid `Link` + `asChild` here: RN Web forwards merged styles onto a real `<a>`, and values like
@@ -221,7 +230,13 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
     marginBottom: 8,
   },
-  lede: { fontSize: 14, lineHeight: 21, marginBottom: 16 },
+  ledeRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    marginBottom: 16,
+  },
+  lede: { fontSize: 14, lineHeight: 21 },
   missionsLink: {
     flexDirection: "row",
     alignItems: "center",

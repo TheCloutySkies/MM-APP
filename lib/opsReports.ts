@@ -274,6 +274,8 @@ export type RouteReconPayloadV1 = {
   routeName: string;
   startMgrs: string;
   endMgrs: string;
+  /** Overall route / AO notes (not per-marker). */
+  description?: string;
   markers: RouteReconMarkerV1[];
   createdAt: number;
   /** AES-GCM JSON bundle (see `encryptUtf8`) of a GeoJSON FeatureCollection from the Sand Table editor. */
@@ -599,6 +601,9 @@ export function formatRouteReconForDisplay(p: RouteReconPayloadV1): string {
     `START: ${p.startMgrs || "—"}`,
     `END: ${p.endMgrs || "—"}`,
   ];
+  if (p.description?.trim()) {
+    head.push("", `NOTES: ${p.description.trim()}`);
+  }
   if (p.markers?.length) {
     head.push("", "MARKERS:");
     p.markers.forEach((m, i) => head.push(`  ${i + 1}. ${routeReconMarkerSummary(m)}`));

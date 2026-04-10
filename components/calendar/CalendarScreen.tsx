@@ -1,5 +1,5 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { useFocusEffect } from "@react-navigation/native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Location from "expo-location";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -29,7 +29,12 @@ import {
     tryDecryptRow,
 } from "@/lib/calendar/calendarApi";
 import { offlineGetEvent, offlineListEventIds } from "@/lib/calendar/calendarOffline";
-import { clearCalendarSession, getCalendarSessionKey, setCalendarSessionKey } from "@/lib/calendar/calendarSession";
+import {
+    clearCalendarSession,
+    getCalendarSessionKey,
+    getCalendarSessionMode,
+    setCalendarSessionKey,
+} from "@/lib/calendar/calendarSession";
 import {
     CALENDAR_EVENT_TYPES,
     type CalendarEventPlain,
@@ -61,12 +66,46 @@ function sameDay(a: Date, d: number, m: Date): boolean {
   return a.getFullYear() === m.getFullYear() && a.getMonth() === m.getMonth() && a.getDate() === d;
 }
 
+const PROFILE_FETCH_MS = 25_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const id = setTimeout(() => reject(new Error(`${label} timed out — check your connection.`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(id);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(id);
+        reject(e);
+      },
+    );
+  });
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+/** `datetime-local` string in local timezone (for web TextInput). */
+function toDatetimeLocalValue(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function parseDatetimeLocalValue(s: string): Date | null {
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t);
+}
+
 export function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const hydrated = useMMStore((s) => s.hydrated);
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
+  const vaultMode = useMMStore((s) => s.vaultMode);
 
   const [phase, setPhase] = useState<"pin" | "app">("pin");
   const [pinText, setPinText] = useState("");
@@ -83,6 +122,10 @@ export function CalendarScreen() {
   const [lng, setLng] = useState<number | null>(null);
   const [startIso, setStartIso] = useState("");
   const [endIso, setEndIso] = useState("");
+  const [startAt, setStartAt] = useState(() => new Date());
+  const [endAt, setEndAt] = useState(() => new Date(Date.now() + 3600_000));
+  /** Native: which end of the event is being picked ('start' | 'end'). */
+  const [nativePickerFor, setNativePickerFor] = useState<null | "start" | "end">(null);
   const [description, setDescription] = useState("");
 
   const selectedDate = useMemo(
@@ -110,24 +153,33 @@ export function CalendarScreen() {
     setEvents(next);
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      clearCalendarSession();
-      setPhase("pin");
-      setPinText("");
-      setPinError(null);
-      setCalMode(null);
-      setEvents([]);
-      setFormOpen(false);
-      return () => {
-        clearCalendarSession();
-        setPhase("pin");
-        setPinText("");
-        setCalMode(null);
-        setEvents([]);
-      };
-    }, []),
-  );
+  const lockCalendar = useCallback(() => {
+    clearCalendarSession();
+    setPhase("pin");
+    setPinText("");
+    setPinError(null);
+    setCalMode(null);
+    setEvents([]);
+    setFormOpen(false);
+    setNativePickerFor(null);
+  }, []);
+
+  /** Vault lock clears calendar crypto session (aligns with “one session” behavior). */
+  useEffect(() => {
+    if (vaultMode == null) lockCalendar();
+  }, [vaultMode, lockCalendar]);
+
+  /** Restore calendar app phase if session key still in memory (tab switch without vault lock). */
+  useEffect(() => {
+    if (!hydrated || vaultMode == null) return;
+    const key = getCalendarSessionKey();
+    const mode = getCalendarSessionMode();
+    if (key && mode) {
+      setCalMode(mode);
+      setPhase("app");
+      void reloadForMode(mode);
+    }
+  }, [hydrated, vaultMode, reloadForMode]);
 
   useEffect(() => {
     void ensureMmCalendarSession();
@@ -187,7 +239,9 @@ export function CalendarScreen() {
     setPinError(null);
     const pinThis = pinText;
     try {
-      const { data: prof, error: pErr } = sb ? await fetchCalendarProfileRow(sb, pid) : { data: null, error: null };
+      const { data: prof, error: pErr } = sb
+        ? await withTimeout(fetchCalendarProfileRow(sb, pid), PROFILE_FETCH_MS, "Calendar profile fetch")
+        : { data: null, error: null };
       if (pErr) throw pErr;
       const route = await resolveCalendarPinRoute(pinThis, prof);
       if (route === "invalid") {
@@ -224,13 +278,17 @@ export function CalendarScreen() {
 
   const openNewForm = () => {
     const now = new Date();
-    setStartIso(now.toISOString().slice(0, 16));
-    setEndIso(new Date(now.getTime() + 3600_000).toISOString().slice(0, 16));
+    const end = new Date(now.getTime() + 3600_000);
+    setStartAt(now);
+    setEndAt(end);
+    setStartIso(toDatetimeLocalValue(now));
+    setEndIso(toDatetimeLocalValue(end));
     setDescription("");
     setLocLabel("");
     setLat(null);
     setLng(null);
     setEvtType("Patrol");
+    setNativePickerFor(null);
     setFormOpen(true);
   };
 
@@ -257,8 +315,10 @@ export function CalendarScreen() {
       Alert.alert("Calendar", "Not signed in. Open the app and sign in, then try again.");
       return;
     }
-    const start = new Date(startIso);
-    const end = new Date(endIso);
+    const start =
+      Platform.OS === "web" ? (parseDatetimeLocalValue(startIso) ?? new Date(Number.NaN)) : startAt;
+    const end =
+      Platform.OS === "web" ? (parseDatetimeLocalValue(endIso) ?? new Date(Number.NaN)) : endAt;
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
       Alert.alert("Calendar", "Start and end must be valid dates.");
       return;
@@ -308,8 +368,8 @@ export function CalendarScreen() {
       <View style={[styles.shell, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
         <Text style={styles.hdr}>Secure calendar</Text>
         <Text style={styles.sub}>
-          Enter your numeric PIN (type below or use the keypad). Routing is verified on-device; keys are wiped when you
-          leave this tab.
+          Enter your numeric PIN. Routing is verified on-device. Session stays active until you lock the calendar or the
+          vault locks.
         </Text>
         {pinError ? <Text style={styles.err}>{pinError}</Text> : null}
         <TextInput
@@ -383,9 +443,19 @@ export function CalendarScreen() {
         { paddingTop: insets.top + 4, paddingBottom: insets.bottom + 72 },
       ]}>
       <View style={styles.topBar}>
-        <Text style={styles.hdrSm}>
-          Calendar {calMode === "decoy" ? "(alternate)" : ""}
-        </Text>
+        <View style={styles.topBarRow}>
+          <Text style={styles.hdrSm}>
+            Calendar {calMode === "decoy" ? "(alternate)" : ""}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Lock calendar"
+            onPress={lockCalendar}
+            hitSlop={8}
+            style={({ pressed }) => [{ opacity: pressed ? 0.75 : 1, padding: 8 }]}>
+            <FontAwesome name="lock" size={18} color={TacticalPalette.coyote} />
+          </Pressable>
+        </View>
         <Text style={styles.monthNavTx}>
           {viewMonth.toLocaleString(undefined, { month: "long", year: "numeric" })}
         </Text>
@@ -449,54 +519,141 @@ export function CalendarScreen() {
         <FontAwesome name="plus" size={24} color="#fff" />
       </Pressable>
 
-      <Modal visible={formOpen} animationType="slide" transparent>
+      <Modal visible={formOpen} animationType="slide" transparent onRequestClose={() => setFormOpen(false)}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalHdr}>New event</Text>
-            <Text style={styles.lbl}>Type</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
-              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-                {CALENDAR_EVENT_TYPES.map((t) => (
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.modalScrollContent}
+            showsVerticalScrollIndicator={false}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalHdr}>New event</Text>
+              <Text style={styles.lbl}>Type</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+                <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                  {CALENDAR_EVENT_TYPES.map((t) => (
+                    <Pressable
+                      key={t}
+                      onPress={() => setEvtType(t)}
+                      style={[styles.chip, evtType === t && styles.chipOn]}>
+                      <Text style={[styles.chipTx, evtType === t && styles.chipTxOn]}>{t}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </ScrollView>
+              <Text style={styles.lbl}>Location</Text>
+              <TextInput
+                value={locLabel}
+                onChangeText={setLocLabel}
+                placeholder="Label or GPS"
+                placeholderTextColor={TacticalPalette.boneMuted}
+                style={styles.input}
+              />
+              <Pressable onPress={() => void useGps()} style={styles.gpsBtn}>
+                <Text style={styles.gpsTx}>Use GPS</Text>
+              </Pressable>
+              <Text style={styles.lbl}>Start</Text>
+              {Platform.OS === "web" ? (
+                <TextInput
+                  value={startIso}
+                  onChangeText={(s) => {
+                    setStartIso(s);
+                    const d = parseDatetimeLocalValue(s);
+                    if (d) setStartAt(d);
+                  }}
+                  style={styles.input}
+                  placeholder="YYYY-MM-DDTHH:mm"
+                />
+              ) : (
+                <>
                   <Pressable
-                    key={t}
-                    onPress={() => setEvtType(t)}
-                    style={[styles.chip, evtType === t && styles.chipOn]}>
-                    <Text style={[styles.chipTx, evtType === t && styles.chipTxOn]}>{t}</Text>
+                    onPress={() => setNativePickerFor("start")}
+                    style={[styles.input, styles.pickFakeInput]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose start date and time">
+                    <Text style={{ color: TacticalPalette.bone }}>
+                      {startAt.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
+                    </Text>
                   </Pressable>
-                ))}
+                  {nativePickerFor === "start" ? (
+                    <DateTimePicker
+                      value={startAt}
+                      mode="datetime"
+                      display={Platform.OS === "ios" ? "spinner" : "default"}
+                      onChange={(ev, date) => {
+                        if (Platform.OS === "android") setNativePickerFor(null);
+                        if ("type" in ev && ev.type === "dismissed") {
+                          if (Platform.OS === "ios") setNativePickerFor(null);
+                          return;
+                        }
+                        if (date) setStartAt(date);
+                        if (Platform.OS === "ios") setNativePickerFor(null);
+                      }}
+                    />
+                  ) : null}
+                </>
+              )}
+              <Text style={styles.lbl}>End</Text>
+              {Platform.OS === "web" ? (
+                <TextInput
+                  value={endIso}
+                  onChangeText={(s) => {
+                    setEndIso(s);
+                    const d = parseDatetimeLocalValue(s);
+                    if (d) setEndAt(d);
+                  }}
+                  style={styles.input}
+                />
+              ) : (
+                <>
+                  <Pressable
+                    onPress={() => setNativePickerFor("end")}
+                    style={[styles.input, styles.pickFakeInput]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose end date and time">
+                    <Text style={{ color: TacticalPalette.bone }}>
+                      {endAt.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
+                    </Text>
+                  </Pressable>
+                  {nativePickerFor === "end" ? (
+                    <DateTimePicker
+                      value={endAt}
+                      mode="datetime"
+                      display={Platform.OS === "ios" ? "spinner" : "default"}
+                      onChange={(ev, date) => {
+                        if (Platform.OS === "android") setNativePickerFor(null);
+                        if ("type" in ev && ev.type === "dismissed") {
+                          if (Platform.OS === "ios") setNativePickerFor(null);
+                          return;
+                        }
+                        if (date) setEndAt(date);
+                        if (Platform.OS === "ios") setNativePickerFor(null);
+                      }}
+                    />
+                  ) : null}
+                </>
+              )}
+              <Text style={styles.lbl}>Description</Text>
+              <TextInput
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                style={[styles.input, { minHeight: 72 }]}
+              />
+              <View style={styles.modalActions}>
+                <Pressable
+                  onPress={() => {
+                    setNativePickerFor(null);
+                    setFormOpen(false);
+                  }}
+                  style={styles.btnGhost}>
+                  <Text style={styles.btnGhostTx}>Cancel</Text>
+                </Pressable>
+                <Pressable onPress={() => void saveEvent()} style={styles.btnPrimary}>
+                  <Text style={styles.btnPrimaryTx}>Save</Text>
+                </Pressable>
               </View>
-            </ScrollView>
-            <Text style={styles.lbl}>Location</Text>
-            <TextInput
-              value={locLabel}
-              onChangeText={setLocLabel}
-              placeholder="Label or GPS"
-              placeholderTextColor={TacticalPalette.boneMuted}
-              style={styles.input}
-            />
-            <Pressable onPress={() => void useGps()} style={styles.gpsBtn}>
-              <Text style={styles.gpsTx}>Use GPS</Text>
-            </Pressable>
-            <Text style={styles.lbl}>Start</Text>
-            <TextInput value={startIso} onChangeText={setStartIso} style={styles.input} placeholder="ISO / local" />
-            <Text style={styles.lbl}>End</Text>
-            <TextInput value={endIso} onChangeText={setEndIso} style={styles.input} />
-            <Text style={styles.lbl}>Description</Text>
-            <TextInput
-              value={description}
-              onChangeText={setDescription}
-              multiline
-              style={[styles.input, { minHeight: 72 }]}
-            />
-            <View style={styles.modalActions}>
-              <Pressable onPress={() => setFormOpen(false)} style={styles.btnGhost}>
-                <Text style={styles.btnGhostTx}>Cancel</Text>
-              </Pressable>
-              <Pressable onPress={() => void saveEvent()} style={styles.btnPrimary}>
-                <Text style={styles.btnPrimaryTx}>Save</Text>
-              </Pressable>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </View>
@@ -542,6 +699,7 @@ const styles = StyleSheet.create({
   },
   unlockTx: { color: "#fff", fontWeight: "800", fontSize: 16 },
   topBar: { paddingHorizontal: 16, gap: 6, marginBottom: 8 },
+  topBarRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
   monthNav: { flexDirection: "row", justifyContent: "flex-end", gap: 20 },
   monthNavTx: { fontSize: 14, color: TacticalPalette.boneMuted },
   weekRow: { flexDirection: "row", justifyContent: "center" },
@@ -584,7 +742,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
     justifyContent: "flex-end",
+    maxHeight: "100%",
   },
+  modalScrollContent: { flexGrow: 1, justifyContent: "flex-end", paddingTop: 24 },
   modalCard: {
     backgroundColor: TacticalPalette.charcoal,
     borderTopLeftRadius: 16,
@@ -622,4 +782,5 @@ const styles = StyleSheet.create({
   btnGhostTx: { color: TacticalPalette.boneMuted },
   btnPrimary: { backgroundColor: TacticalPalette.accent, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 10 },
   btnPrimaryTx: { color: "#fff", fontWeight: "800" },
+  pickFakeInput: { justifyContent: "center" },
 });

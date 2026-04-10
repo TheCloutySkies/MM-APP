@@ -1,17 +1,19 @@
 import { useState } from "react";
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    useWindowDimensions,
+    View,
 } from "react-native";
 
+import { opsModalContentExtras } from "@/components/ops/opsModalScroll";
 import Colors from "@/constants/Colors";
 import { encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { OPS_AAD, type TargetPackagePayloadV1 } from "@/lib/opsReports";
@@ -41,6 +43,7 @@ export function TargetPackageModal({
   operationId = null,
 }: Props) {
   const p = Colors[scheme];
+  const { width: winW } = useWindowDimensions();
   const [objectiveName, setObjectiveName] = useState("");
   const [coordinates, setCoordinates] = useState("");
   const [infilRoutes, setInfilRoutes] = useState("");
@@ -114,7 +117,7 @@ export function TargetPackageModal({
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={[styles.wrap, { backgroundColor: p.background }]}
+        style={[styles.wrap, { backgroundColor: p.background, minHeight: 0 }]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={styles.header}>
           <Text style={[styles.headerTitle, { color: p.text }]}>Target package</Text>
@@ -123,8 +126,8 @@ export function TargetPackageModal({
           </Pressable>
         </View>
         <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          style={[styles.scroll, { minHeight: 0 }]}
+          contentContainerStyle={[styles.scrollContent, opsModalContentExtras(winW, 40)]}
           keyboardShouldPersistTaps="handled">
           <Text style={[styles.hint, { color: p.tabIconDefault }]}>
             Objective packet / CARVER-oriented fields. Encrypted for the team before upload.
@@ -175,7 +178,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: "800" },
   close: { fontSize: 17, fontWeight: "700" },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 32, gap: 6 },
+  scrollContent: { paddingBottom: 0, gap: 6 },
   hint: { fontSize: 12, lineHeight: 17, marginBottom: 8 },
   label: { fontSize: 11, fontWeight: "700", marginTop: 10, letterSpacing: 0.4 },
   input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15 },

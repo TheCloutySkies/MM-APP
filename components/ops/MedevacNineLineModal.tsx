@@ -2,29 +2,32 @@ import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { useMemo, useState, type ReactNode } from "react";
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    useWindowDimensions,
+    View,
 } from "react-native";
 
 import Colors from "@/constants/Colors";
-import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import { encryptUtf8 } from "@/lib/crypto/aesGcm";
+import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import {
-  MEDEVAC_SPECIAL_EQUIPMENT_CHOICES,
-  OPS_AAD,
-  type MedevacNineLinePayloadV1,
-  type MedevacSpecialEquipment,
+    MEDEVAC_SPECIAL_EQUIPMENT_CHOICES,
+    OPS_AAD,
+    type MedevacNineLinePayloadV1,
+    type MedevacSpecialEquipment,
 } from "@/lib/opsReports";
 import { useMMStore } from "@/store/mmStore";
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { opsModalContentExtras } from "@/components/ops/opsModalScroll";
 
 type Props = {
   visible: boolean;
@@ -48,7 +51,7 @@ function Counter(props: {
 }) {
   const step = (d: number) => props.onChange(Math.max(0, props.value + d));
   return (
-    <View style={{ marginBottom: 12, flex: 1, minWidth: 120 }}>
+    <View style={{ marginBottom: 12, flex: 1, minWidth: 0 }}>
       <Text style={{ fontSize: 11, fontWeight: "800", color: props.muted, marginBottom: 6 }}>{props.label}</Text>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
         <Pressable onPress={() => step(-1)} style={styles.ctBtn}>
@@ -77,6 +80,7 @@ export function MedevacNineLineModal({
   const router = useRouter();
   const setMgrsPickHandler = useMMStore((s) => s.setMgrsPickHandler);
   const p = Colors[scheme];
+  const { width: winW } = useWindowDimensions();
 
   const [line1, setLine1] = useState("");
   const [line2, setLine2] = useState("");
@@ -223,7 +227,7 @@ export function MedevacNineLineModal({
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={[styles.wrap, { backgroundColor: p.background }]}
+        style={[styles.wrap, { backgroundColor: p.background, minHeight: 0 }]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={styles.header}>
           <Text style={[styles.headerTitle, { color: p.text }]}>9-line MEDEVAC</Text>
@@ -231,7 +235,10 @@ export function MedevacNineLineModal({
             <Text style={[styles.close, { color: p.tint }]}>Close</Text>
           </Pressable>
         </View>
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={[styles.scroll, { minHeight: 0 }]}
+          contentContainerStyle={[styles.scrollContent, opsModalContentExtras(winW, 48)]}
+          keyboardShouldPersistTaps="handled">
           <Text style={[styles.hint, { color: p.tabIconDefault }]}>
             Lines 1–5 are required before dispatch. The next required line is highlighted. Lines 6–9 add LZ / patient detail.
           </Text>
@@ -406,7 +413,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: "800" },
   close: { fontSize: 17, fontWeight: "700" },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 48 },
+  scrollContent: { paddingBottom: 0 },
   hint: { fontSize: 12, lineHeight: 17, marginBottom: 12 },
   lineCard: { borderWidth: 2, borderRadius: 14, padding: 12, marginBottom: 12 },
   lineTitle: { fontSize: 14, fontWeight: "800", marginBottom: 10 },

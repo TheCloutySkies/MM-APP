@@ -22,7 +22,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { MapGisFeaturePanel } from "@/components/map/MapGisFeaturePanel";
-import { MapIntelPanel } from "@/components/map/MapIntelPanel";
+import { MapIntelPanel, type MapIntelLinkPick } from "@/components/map/MapIntelPanel";
 import { TacticalCategoryModal } from "@/components/map/TacticalCategoryModal";
 import {
     TacticalMap,
@@ -69,6 +69,7 @@ import {
     normalizeTacticalPayload,
     tacticPayloadToLayers,
     type TacCategoryId,
+    type TacticalMapPayload,
 } from "@/lib/mapMarkers";
 import {
     bboxAroundPoint,
@@ -347,6 +348,9 @@ export default function MapScreen() {
   const [hudSearching, setHudSearching] = useState(false);
   /** Calcite-style intel tray — marker details in trailing / bottom panel instead of only a popup. */
   const [selectedPin, setSelectedPin] = useState<MapPin | null>(null);
+  /** Decrypted tactical payloads keyed by `map_markers.id` (for edit / link UI). */
+  const [tacticalPayloadById, setTacticalPayloadById] = useState<Record<string, TacticalMapPayload>>({});
+  const [intelLinkOptions, setIntelLinkOptions] = useState<MapIntelLinkPick[]>([]);
   /** Web Leaflet: Turf + Geoman + MIL symbols — encrypted before any server write. */
   const [gisFc, setGisFc] = useState(() => emptyFeatureCollection());
   const [activeMapTool, setActiveMapTool] = useState<ActiveMapTool>("navigate");
@@ -544,11 +548,13 @@ export default function MapScreen() {
     const nextPins: MapPin[] = [];
     const nextLines: MapPolylineOverlay[] = [];
     const nextPolys: MapPolygonOverlay[] = [];
+    const nextPayloads: Record<string, TacticalMapPayload> = {};
     for (const row of data ?? []) {
       try {
         const json = decryptUtf8(mapKey, row.encrypted_payload, "mm-map-marker");
         const payload = normalizeTacticalPayload(JSON.parse(json) as unknown);
         if (!payload) continue;
+        nextPayloads[row.id as string] = payload;
         const stale = payload.staleHours
           ? Date.now() - payload.droppedAt > payload.staleHours * 3600 * 1000
           : false;
@@ -563,7 +569,92 @@ export default function MapScreen() {
     setTacticalPins(nextPins);
     setTacticalPolylines(nextLines);
     setTacticalPolygons(nextPolys);
+    setTacticalPayloadById(nextPayloads);
   }, [mapKey, supabase]);
+
+  useEffect(() => {
+    if (!supabase || !selectedPin?.markerOwnerProfileId) {
+      setIntelLinkOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const [opsRes, hubsRes, legRes] = await Promise.all([
+        supabase
+          .from("ops_reports")
+          .select("id, doc_kind, created_at, author_username")
+          .order("created_at", { ascending: false })
+          .limit(80),
+        supabase
+          .from("operation_hubs")
+          .select("id, created_at, author_username")
+          .order("created_at", { ascending: false })
+          .limit(80),
+        supabase.from("missions").select("id, created_at").order("created_at", { ascending: false }).limit(80),
+      ]);
+      if (cancelled) return;
+      const out: MapIntelLinkPick[] = [];
+      for (const r of opsRes.data ?? []) {
+        const id = r.id as string;
+        const dk = String(r.doc_kind ?? "report");
+        const au = String(r.author_username ?? "—");
+        const dt = String(r.created_at ?? "").slice(0, 10);
+        out.push({ source: "ops_report", id, subtitle: `${dk} · ${au} · ${dt}` });
+      }
+      for (const r of hubsRes.data ?? []) {
+        const id = r.id as string;
+        const au = String(r.author_username ?? "—");
+        const dt = String(r.created_at ?? "").slice(0, 10);
+        out.push({ source: "operation_hub", id, subtitle: `Operation hub · ${au} · ${dt}` });
+      }
+      for (const r of legRes.data ?? []) {
+        const id = r.id as string;
+        const dt = String(r.created_at ?? "").slice(0, 10);
+        out.push({ source: "legacy_mission", id, subtitle: `Legacy mission · ${dt}` });
+      }
+      setIntelLinkOptions(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, selectedPin?.id, selectedPin?.markerOwnerProfileId]);
+
+  const saveIntelEdits = useCallback(
+    async (markerId: string, next: { title: string; notes: string; link: MapIntelLinkPick | null }) => {
+      if (!supabase || !mapKey || mapKey.length !== 32) {
+        Alert.alert("Map", "Map encryption key not available.");
+        return;
+      }
+      const base = tacticalPayloadById[markerId];
+      if (!base) {
+        Alert.alert("Map", "Could not load marker data.");
+        return;
+      }
+      const merged: TacticalMapPayload = {
+        ...base,
+        title: next.title.trim() || undefined,
+        notes: next.notes.trim() || undefined,
+        linkedOpsReportId: undefined,
+        linkedOperationHubId: undefined,
+        linkedLegacyMissionId: undefined,
+        linkLabel: undefined,
+      };
+      if (next.link) {
+        merged.linkLabel = next.link.subtitle;
+        if (next.link.source === "ops_report") merged.linkedOpsReportId = next.link.id;
+        else if (next.link.source === "operation_hub") merged.linkedOperationHubId = next.link.id;
+        else merged.linkedLegacyMissionId = next.link.id;
+      }
+      const encrypted = encryptUtf8(mapKey, JSON.stringify(merged), "mm-map-marker");
+      const { error } = await supabase.from("map_markers").update({ encrypted_payload: encrypted }).eq("id", markerId);
+      if (error) {
+        Alert.alert("Map", error.message);
+        return;
+      }
+      void loadMarkers();
+    },
+    [supabase, mapKey, tacticalPayloadById, loadMarkers],
+  );
 
   const deleteTacticalMarkerRow = useCallback(
     async (markerId: string) => {
@@ -2391,6 +2482,7 @@ export default function MapScreen() {
           ) : selectedPin ? (
             <MapIntelPanel
               pin={selectedPin}
+              payload={tacticalPayloadById[selectedPin.id] ?? null}
               chrome={chrome}
               variant="trailing"
               onDismiss={() => setSelectedPin(null)}
@@ -2398,6 +2490,24 @@ export default function MapScreen() {
                 flyToCoords(selectedPin.lat, selectedPin.lng, 14);
               }}
               onAccentLabel={onTintLabel}
+              canEdit={
+                !!profileId &&
+                !!mapKey &&
+                !!selectedPin.markerOwnerProfileId &&
+                selectedPin.markerOwnerProfileId === profileId &&
+                !!tacticalPayloadById[selectedPin.id]
+              }
+              onSaveIntel={
+                profileId &&
+                mapKey &&
+                selectedPin.markerOwnerProfileId === profileId &&
+                tacticalPayloadById[selectedPin.id]
+                  ? async (n) => {
+                      await saveIntelEdits(selectedPin.id, n);
+                    }
+                  : undefined
+              }
+              linkOptions={intelLinkOptions}
               onDeleteMyMarker={
                 profileId &&
                 selectedPin.markerOwnerProfileId &&
@@ -2479,6 +2589,7 @@ export default function MapScreen() {
           ) : selectedPin ? (
             <MapIntelPanel
               pin={selectedPin}
+              payload={tacticalPayloadById[selectedPin.id] ?? null}
               chrome={chrome}
               variant="bottom"
               onDismiss={() => setSelectedPin(null)}
@@ -2487,7 +2598,25 @@ export default function MapScreen() {
               }}
               onAccentLabel={onTintLabel}
               scrollPanY
-              maxBottomPx={Math.round(windowH * 0.5)}
+              maxBottomPx={Math.round(windowH * 0.58)}
+              canEdit={
+                !!profileId &&
+                !!mapKey &&
+                !!selectedPin.markerOwnerProfileId &&
+                selectedPin.markerOwnerProfileId === profileId &&
+                !!tacticalPayloadById[selectedPin.id]
+              }
+              onSaveIntel={
+                profileId &&
+                mapKey &&
+                selectedPin.markerOwnerProfileId === profileId &&
+                tacticalPayloadById[selectedPin.id]
+                  ? async (n) => {
+                      await saveIntelEdits(selectedPin.id, n);
+                    }
+                  : undefined
+              }
+              linkOptions={intelLinkOptions}
               onDeleteMyMarker={
                 profileId &&
                 selectedPin.markerOwnerProfileId &&
