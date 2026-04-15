@@ -9,9 +9,6 @@ import {
     reorderTabBefore,
 } from "@/constants/mainTabs";
 import type { VisualThemeId } from "@/constants/TacticalTheme";
-import * as aes from "@/lib/crypto/aesGcm";
-import { hexToBytes, utf8 } from "@/lib/crypto/bytes";
-import { deriveKeyArgon2id } from "@/lib/crypto/kdf";
 import { getMapSharedKeyHex } from "@/lib/env";
 import type { LayoutPreference } from "@/lib/layout/layoutPreference";
 import {
@@ -20,18 +17,28 @@ import {
     resolveDesktopFromLayoutPref,
     setLayoutPreferencePersistent
 } from "@/lib/layout/layoutPreference";
-import { SCREENING_REWARD_TEAM_KEY_HEX } from "@/lib/opsScreening";
-import { SK, secureDelete, secureGet, secureSet, wipeLocalSecrets, wipeSessionTokens } from "@/lib/secure/mmSecureStore";
+import {
+  SK,
+  secureDelete,
+  secureGet,
+  secureSet,
+  wipeLocalSecrets,
+  wipeSessionTokens,
+} from "@/lib/secure/mmSecureStore";
 import { getAuthSupabase } from "@/lib/supabase/authSupabase";
-import { ensureCalendarSaltOnUnlock } from "@/lib/supabase/calendarProfile";
+import {
+  ensureCalendarSaltOnUnlock,
+  syncCalendarSecretsFromServerToDevice,
+} from "@/lib/supabase/calendarProfile";
 import { isJwtExpired, jwtDisplayHandle, jwtSub } from "@/lib/supabase/jwtExp";
 import { createMMSupabase } from "@/lib/supabase/mmClient";
-
-export type VaultMode = "main" | "decoy";
 
 export type VaultDriveViewMode = "grid" | "list";
 
 export type SessionSource = "auth" | "legacy";
+
+// Secure-cloud pivot: no decoy vault or client-side vault keys.
+export type VaultMode = "main";
 
 type MMState = {
   hydrated: boolean;
@@ -44,11 +51,7 @@ type MMState = {
   decoyAlertsEnabled: boolean;
   /** How the current API token was obtained — affects which Supabase client we keep. */
   sessionSource: SessionSource | null;
-  setupComplete: boolean;
   vaultMode: VaultMode | null;
-  /** 32-byte AES keys in memory only; cleared on lock */
-  mainVaultKey: Uint8Array | null;
-  decoyVaultKey: Uint8Array | null;
   supabase: SupabaseClient | null;
   desktopMode: boolean;
   vaultDriveViewMode: VaultDriveViewMode;
@@ -66,8 +69,6 @@ type MMState = {
    * Lets teammates match EXPO_PUBLIC_MM_MAP_SHARED_KEY without rebuilding.
    */
   teamMapSharedKeyHex: string | null;
-  /** Device-local: completed post-unlock screening (main vault); grants shared ops key from env. */
-  opsScreeningComplete: boolean;
   /** Deep link: focus tactical map row id (map_markers) then clear. */
   mapFocusMarkerId: string | null;
   /** Deep link: open vault private object by vault_objects.id then clear. */
@@ -114,7 +115,6 @@ type MMActions = {
   hydrateFromStorage: () => Promise<void>;
   logout: () => Promise<void>;
   lock: () => Promise<void>;
-  /** Scorched earth: clear session + keys */
   fullLock: () => Promise<void>;
   login: (
     token: string,
@@ -129,19 +129,7 @@ type MMActions = {
   /** Web only: when layout preference is auto, update desktopMode from innerWidth without persisting. */
   applyLayoutBreakpoint: () => void;
   setVisualTheme: (v: VisualThemeId) => Promise<void>;
-  completeSetup: (args: {
-    masterPassword: string;
-    primaryPin: string;
-    duressPin: string;
-    mainVaultKey: Uint8Array;
-    decoyVaultKey: Uint8Array;
-  }) => Promise<void>;
-  tryUnlock: (
-    masterPassword: string,
-    pin: string,
-  ) => Promise<{ ok: boolean; mode?: VaultMode }>;
   setSupabaseClient: (c: SupabaseClient | null) => void;
-  touchRealUnlock: () => Promise<void>;
   setVaultDriveViewMode: (v: VaultDriveViewMode) => Promise<void>;
   /** Re-read mm_profiles.username + callsign_ok (after callsign save or remote change). */
   syncMmProfileRow: () => Promise<void>;
@@ -156,11 +144,6 @@ type MMActions = {
   setMapNightDimPercent: (n: number) => Promise<void>;
   /** Persist 64-char hex team key, or clear to use env / vault only. */
   setTeamMapSharedKeyHex: (hex: string | null) => Promise<void>;
-  /**
-   * After correct screening answer: persist team key from `EXPO_PUBLIC_MM_MAP_SHARED_KEY` (if not already set),
-   * then mark screening complete on this device.
-   */
-  completeOpsScreening: () => Promise<void>;
   /**
    * If we have an access token but `profileId` was lost (e.g. partial localStorage on web),
    * recover `sub` from the JWT, persist, and recreate the Supabase client when missing.
@@ -269,10 +252,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   callsignOk: true,
   decoyAlertsEnabled: false,
   sessionSource: null,
-  setupComplete: false,
   vaultMode: null,
-  mainVaultKey: null,
-  decoyVaultKey: null,
   supabase: null,
   desktopMode: false,
   vaultDriveViewMode: "list",
@@ -282,7 +262,6 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   tabRailHeightPx: TAB_RAIL_MOB_H.def,
   mapNightDimPercent: MAP_NIGHT_DIM.def,
   teamMapSharedKeyHex: null,
-  opsScreeningComplete: false,
   mapFocusMarkerId: null,
   vaultFocusObjectId: null,
   mgrsPickHandler: null,
@@ -292,12 +271,6 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   setMapFocusMarkerId: (id) => set({ mapFocusMarkerId: id }),
   setVaultFocusObjectId: (id) => set({ vaultFocusObjectId: id }),
   setMgrsPickHandler: (fn) => set({ mgrsPickHandler: fn }),
-
-  completeOpsScreening: async () => {
-    await get().setTeamMapSharedKeyHex(SCREENING_REWARD_TEAM_KEY_HEX);
-    await secureSet(SK.opsScreeningComplete, "1");
-    set({ opsScreeningComplete: true });
-  },
 
   setTeamMapSharedKeyHex: async (hex) => {
     const raw = hex?.trim().toLowerCase() ?? "";
@@ -367,7 +340,6 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   },
 
   hydrateFromStorage: async () => {
-    const setupDone = (await secureGet(SK.setupDone)) === "1";
     let layoutPref: LayoutPreference = await getLayoutPreferenceAsync();
     if (Platform.OS === "web") {
       try {
@@ -397,7 +369,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       if (t.length === 64 && /^[0-9a-f]+$/.test(t)) teamMapSharedKeyHex = t;
     }
 
-    const opsScreeningComplete = (await secureGet(SK.opsScreeningComplete)) === "1";
+    // Secure-cloud pivot: no vault unlock gate or screening dependency.
 
     let token: string | null = null;
     let profileId: string | null = null;
@@ -476,6 +448,14 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       }
     }
 
+    if (supabase && profileId) {
+      try {
+        await syncCalendarSecretsFromServerToDevice(supabase, profileId);
+      } catch {
+        /* offline / RLS */
+      }
+    }
+
     set({
       hydrated: true,
       accessToken: token,
@@ -484,7 +464,6 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       callsignOk,
       decoyAlertsEnabled,
       sessionSource,
-      setupComplete: setupDone,
       supabase,
       desktopMode,
       vaultDriveViewMode,
@@ -494,7 +473,6 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       tabRailHeightPx,
       mapNightDimPercent,
       teamMapSharedKeyHex,
-      opsScreeningComplete,
       mapFocusMarkerId: null,
       vaultFocusObjectId: null,
       mgrsPickHandler: null,
@@ -583,6 +561,11 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     } else if (source === "auth") {
       callsignOk = false;
     }
+    try {
+      await syncCalendarSecretsFromServerToDevice(supabase, profileId);
+    } catch {
+      /* offline */
+    }
     set({
       accessToken: loginToken,
       profileId,
@@ -591,15 +574,13 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       decoyAlertsEnabled,
       sessionSource: source,
       supabase,
+      vaultMode: "main",
     });
   },
 
   logout: async () => {
-    get().mainVaultKey?.fill(0);
-    get().decoyVaultKey?.fill(0);
     await clearGoTrueSession();
     await wipeSessionTokens();
-    const setupDone = (await secureGet(SK.setupDone)) === "1";
     set({
       accessToken: null,
       profileId: null,
@@ -608,10 +589,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       decoyAlertsEnabled: false,
       sessionSource: null,
       vaultMode: null,
-      mainVaultKey: null,
-      decoyVaultKey: null,
       supabase: null,
-      setupComplete: setupDone,
       mapFocusMarkerId: null,
       vaultFocusObjectId: null,
       mgrsPickHandler: null,
@@ -619,12 +597,8 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   },
 
   lock: async () => {
-    get().mainVaultKey?.fill(0);
-    get().decoyVaultKey?.fill(0);
     set({
       vaultMode: null,
-      mainVaultKey: null,
-      decoyVaultKey: null,
       mapFocusMarkerId: null,
       vaultFocusObjectId: null,
       mgrsPickHandler: null,
@@ -632,9 +606,8 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
   },
 
   fullLock: async () => {
-    get().mainVaultKey?.fill(0);
-    get().decoyVaultKey?.fill(0);
     await clearGoTrueSession();
+    await wipeSessionTokens();
     await wipeLocalSecrets();
     set({
       accessToken: null,
@@ -643,137 +616,19 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
       callsignOk: true,
       decoyAlertsEnabled: false,
       sessionSource: null,
-      setupComplete: false,
       vaultMode: null,
-      mainVaultKey: null,
-      decoyVaultKey: null,
       supabase: null,
       teamMapSharedKeyHex: null,
-      opsScreeningComplete: false,
       mapFocusMarkerId: null,
       vaultFocusObjectId: null,
       mgrsPickHandler: null,
     });
   },
-
-  completeSetup: async ({ masterPassword, primaryPin, duressPin, mainVaultKey, decoyVaultKey }) => {
-    const saltMain = cryptoRandomSalt();
-    const saltDecoy = cryptoRandomSalt();
-    const kMain = await deriveKeyArgon2id(masterPassword + primaryPin, saltMain);
-    const kDecoy = await deriveKeyArgon2id(masterPassword + duressPin, saltDecoy);
-    const wrapMain = aes.aes256GcmEncrypt(kMain, mainVaultKey, utf8("mm-main-wrap"));
-    const wrapDecoy = aes.aes256GcmEncrypt(kDecoy, decoyVaultKey, utf8("mm-decoy-wrap"));
-    kMain.fill(0);
-    kDecoy.fill(0);
-    await secureSet(SK.saltMain, saltMain);
-    await secureSet(SK.saltDecoy, saltDecoy);
-    await secureSet(SK.wrapMain, JSON.stringify(wrapMain));
-    await secureSet(SK.wrapDecoy, JSON.stringify(wrapDecoy));
-    await secureSet(SK.setupDone, "1");
-    set({ setupComplete: true });
-  },
-
-  tryUnlock: async (masterPassword, pin) => {
-    const saltMain = await secureGet(SK.saltMain);
-    const saltDecoy = await secureGet(SK.saltDecoy);
-    const wrapMainJson = await secureGet(SK.wrapMain);
-    const wrapDecoyJson = await secureGet(SK.wrapDecoy);
-    if (!saltMain || !saltDecoy || !wrapMainJson || !wrapDecoyJson) {
-      return { ok: false };
-    }
-    const kMainTry = await deriveKeyArgon2id(masterPassword + pin, saltMain);
-    const kDecoyTry = await deriveKeyArgon2id(masterPassword + pin, saltDecoy);
-    let mainKey: Uint8Array | null = null;
-    let decoyKey: Uint8Array | null = null;
-    try {
-      mainKey = aes.aes256GcmDecrypt(kMainTry, JSON.parse(wrapMainJson), utf8("mm-main-wrap"));
-    } catch {
-      mainKey = null;
-    }
-    try {
-      decoyKey = aes.aes256GcmDecrypt(kDecoyTry, JSON.parse(wrapDecoyJson), utf8("mm-decoy-wrap"));
-    } catch {
-      decoyKey = null;
-    }
-    kMainTry.fill(0);
-    kDecoyTry.fill(0);
-    await new Promise((r) => setTimeout(r, 400));
-    if (mainKey && decoyKey) {
-      mainKey.fill(0);
-      decoyKey.fill(0);
-      return { ok: false };
-    }
-    if (mainKey) {
-      set({ mainVaultKey: mainKey, decoyVaultKey: null, vaultMode: "main" });
-      const supa = get().supabase;
-      const pid = get().profileId;
-      if (supa && pid) void ensureCalendarSaltOnUnlock(supa, pid, pin, "primary");
-      return { ok: true, mode: "main" };
-    }
-    if (decoyKey) {
-      set({ decoyVaultKey: decoyKey, mainVaultKey: null, vaultMode: "decoy" });
-      const supa = get().supabase;
-      const pid = get().profileId;
-      if (supa && pid) void ensureCalendarSaltOnUnlock(supa, pid, pin, "duress");
-      return { ok: true, mode: "decoy" };
-    }
-    return { ok: false };
-  },
-
-  touchRealUnlock: async () => {
-    await secureSet(SK.lastRealUnlock, String(Date.now()));
-  },
 }));
-
-function cryptoRandomSalt(): string {
-  const a = new Uint8Array(16);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(a);
-  }
-  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-/** Marker encryption: Settings team hex → env shared hex → vault partition. */
-export function resolveMapEncryptKey(
-  mainVaultKey: Uint8Array | null,
-  decoyVaultKey: Uint8Array | null,
-  mode: VaultMode | null,
-): Uint8Array {
+export function resolveMapEncryptKeyHex(): string | undefined {
   const stored = useMMStore.getState().teamMapSharedKeyHex?.trim().toLowerCase() ?? "";
-  if (stored.length === 64 && /^[0-9a-f]+$/.test(stored)) {
-    return hexToBytes(stored);
-  }
-  const hex = getMapSharedKeyHex();
-  if (hex) return hexToBytes(hex);
-  if (mode === "main" && mainVaultKey?.length === 32) return mainVaultKey;
-  if (mode === "decoy" && decoyVaultKey?.length === 32) return decoyVaultKey;
-  throw new Error("Map key unavailable");
+  if (stored.length === 64 && /^[0-9a-f]+$/.test(stored)) return stored;
+  return getMapSharedKeyHex();
 }
 
-/**
- * All distinct keys to try when opening someone else's ops row (shared + main + decoy vault).
- * Order: primary resolver, then the other vault key, then redundant env/stored hex if differ.
- */
-export function collectOpsDecryptCandidates(
-  mainVaultKey: Uint8Array | null,
-  decoyVaultKey: Uint8Array | null,
-  mode: VaultMode | null,
-): Uint8Array[] {
-  const keys: Uint8Array[] = [];
-  const add = (k: Uint8Array | null | undefined) => {
-    if (!k || k.length !== 32) return;
-    if (!keys.some((x) => x.length === k.length && x.every((b, i) => b === k[i]))) keys.push(k);
-  };
-  try {
-    add(resolveMapEncryptKey(mainVaultKey, decoyVaultKey, mode));
-  } catch {
-    /* may have no shared key and vault locked */
-  }
-  add(mainVaultKey ?? undefined);
-  add(decoyVaultKey ?? undefined);
-  const st = useMMStore.getState().teamMapSharedKeyHex?.trim().toLowerCase() ?? "";
-  if (st.length === 64 && /^[0-9a-f]+$/.test(st)) add(hexToBytes(st));
-  const envHex = getMapSharedKeyHex();
-  if (envHex) add(hexToBytes(envHex));
-  return keys;
-}
+export const resolveMapEncryptKey = resolveMapEncryptKeyHex;

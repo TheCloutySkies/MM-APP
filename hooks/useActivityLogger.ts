@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 
 import { appendActivityOutbox } from "@/lib/e2ee/localStore";
-import { getTeamGroupKeyBridge } from "@/lib/e2ee/teamGroupKeyBridge";
 import { buildActivityPlaintext, encryptActivityPayloadJson } from "@/lib/activityLog/crypto";
 import type { ActivityLogType } from "@/lib/activityLog/types";
 import { useMMStore } from "@/store/mmStore";
@@ -33,16 +32,13 @@ export function useActivityLogger() {
   const logAction = useCallback(
     async (type: ActivityLogType, referenceId: string, fallbackText?: string) => {
       if (!supabase || !profileId || !referenceId.trim()) return;
-      const teamKey = getTeamGroupKeyBridge();
-      if (!teamKey) return;
 
       const plain = buildActivityPlaintext(
         type,
         referenceId,
         (fallbackText ?? "").trim() || defaultCaption(type),
       );
-      const encrypted_payload = await encryptActivityPayloadJson(teamKey, plain);
-      if (!encrypted_payload) return;
+      const encrypted_payload = await encryptActivityPayloadJson(plain);
 
       const netOffline =
         typeof navigator !== "undefined" &&

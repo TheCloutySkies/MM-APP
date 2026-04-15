@@ -31,7 +31,7 @@ export function TacticalClockBadge() {
     <View
       style={[
         styles.wrap,
-        Platform.OS === "web" ? ({ userSelect: "none" } as const) : null,
+        Platform.OS === "web" ? ({ userSelect: "none" } as unknown as any) : null,
         {
           top: insets.top + 2,
           right: Math.max(insets.right, 6),

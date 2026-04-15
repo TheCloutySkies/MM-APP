@@ -1,10 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { encryptUtf8 } from "@/lib/crypto/aesGcm";
-
 import {
   VAULT_FOLDER_MIME,
-  vaultMetaAad,
   type VaultMetaPlainV1,
   type VaultPartition,
 } from "./vaultConstants";
@@ -12,13 +9,11 @@ import {
 export async function insertVaultFolder(params: {
   supabase: SupabaseClient;
   profileId: string;
-  vaultKey: Uint8Array;
   partition: VaultPartition;
   folderName: string;
   parentVaultObjectId: string | null;
 }): Promise<{ ok: true; objectId: string } | { ok: false; error: string }> {
-  const { supabase, profileId, vaultKey, partition, folderName, parentVaultObjectId } = params;
-  if (vaultKey.length !== 32) return { ok: false, error: "Unlock your Vault to continue." };
+  const { supabase, profileId, partition, folderName, parentVaultObjectId } = params;
   const name = folderName.trim();
   if (!name) return { ok: false, error: "Enter a folder name." };
 
@@ -30,7 +25,7 @@ export async function insertVaultFolder(params: {
     size: 0,
     mimeType: VAULT_FOLDER_MIME,
   };
-  const encryptedMeta = encryptUtf8(vaultKey, JSON.stringify(metaPlain), vaultMetaAad(partition));
+  const encryptedMeta = JSON.stringify(metaPlain);
 
   const { error: voErr } = await supabase.from("vault_objects").insert({
     id: objectId,

@@ -5,6 +5,8 @@ import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import "react-native-reanimated";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 
 import { LayoutProvider } from "@/components/layout/LayoutProvider";
 import { LayoutWelcomeGate } from "@/components/layout/LayoutWelcomeGate";
@@ -25,6 +27,17 @@ export const unstable_settings = {
 };
 
 SplashScreen.preventAutoHideAsync();
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000,
+      gcTime: 30 * 60 * 1000,
+      retry: 1,
+      refetchOnWindowFocus: Platform.OS === "web",
+    },
+  },
+});
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -73,21 +86,25 @@ function RootLayoutNav() {
   }, []);
 
   return (
-    <SafeAreaProvider>
-      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-        <LayoutProvider>
-          <PwaShellReadyBanner />
-          <LayoutWelcomeGate />
-          <Stack
-            screenOptions={{
-              contentStyle: { flex: 1, backgroundColor: chrome.background },
-            }}>
-            <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(app)" options={{ headerShown: false }} />
-          </Stack>
-        </LayoutProvider>
-      </ThemeProvider>
-    </SafeAreaProvider>
+    <QueryClientProvider client={queryClient}>
+      <BottomSheetModalProvider>
+        <SafeAreaProvider>
+          <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+            <LayoutProvider>
+              <PwaShellReadyBanner />
+              <LayoutWelcomeGate />
+              <Stack
+                screenOptions={{
+                  contentStyle: { flex: 1, backgroundColor: chrome.background },
+                }}>
+                <Stack.Screen name="index" options={{ headerShown: false }} />
+                <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                <Stack.Screen name="(app)" options={{ headerShown: false }} />
+              </Stack>
+            </LayoutProvider>
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </BottomSheetModalProvider>
+    </QueryClientProvider>
   );
 }

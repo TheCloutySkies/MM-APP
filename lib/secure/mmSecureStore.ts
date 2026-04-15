@@ -90,7 +90,6 @@ export const SK = {
   /** Optional 64-char hex — same as EXPO_PUBLIC_MM_MAP_SHARED_KEY; ops + map decrypt for the whole unit. */
   teamMapSharedKeyHex: "mm_team_map_shared_key_hex",
   /** Main-vault users only: "1" after passing ops screening and receiving the unit operations key. */
-  opsScreeningComplete: "mm_ops_screening_complete",
 } as const;
 
 /** Clear MM session tokens only (crypto setup on device preserved). */

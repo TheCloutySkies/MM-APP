@@ -36,6 +36,8 @@ import type { MapBaseLayerId, MapPointerMode, MapUserLocation } from "@/componen
 import { useActivityLogger } from "@/hooks/useActivityLogger";
 import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 import { lngLatToMgrs } from "@/lib/geo/mgrsFormat";
 import { geocodeSearch } from "@/lib/geocode";
 import { encryptFeatureCollectionJson } from "@/lib/gis/geoJsonCrypto";
@@ -296,19 +298,19 @@ export default function MapScreen() {
   const username = useMMStore((s) => s.username);
   const desktopMode = useMMStore((s) => s.desktopMode);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
 
   /** Label on solid tint buttons — crimson (Night Ops) needs light text; woodland dark uses dark on green. */
   const onTintLabel = visualTheme === "nightops" ? "#ffffff" : scheme === "dark" ? "#0f172a" : "#ffffff";
 
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [vaultMode]);
 
   const { logAction } = useActivityLogger();
   const mapFocusMarkerId = useMMStore((s) => s.mapFocusMarkerId);
@@ -2557,7 +2559,7 @@ export default function MapScreen() {
               <ScrollView
                 style={[
                   styles.toolsDockScroll,
-                  Platform.OS === "web" ? ({ touchAction: "pan-y" } as const) : null,
+                  Platform.OS === "web" ? ({ touchAction: "pan-y" } as unknown as any) : null,
                 ]}
                 contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom + 8 }]}
                 keyboardShouldPersistTaps="handled"
@@ -2674,7 +2676,7 @@ export default function MapScreen() {
               <ScrollView
                 style={[
                   styles.sheetBodyScroll,
-                  Platform.OS === "web" ? ({ touchAction: "pan-y" } as const) : null,
+                  Platform.OS === "web" ? ({ touchAction: "pan-y" } as unknown as any) : null,
                 ]}
                 contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetPadBottom }]}
                 keyboardShouldPersistTaps="handled"

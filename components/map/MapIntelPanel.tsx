@@ -169,7 +169,7 @@ export function MapIntelPanel({
       <ScrollView
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        style={scrollPanY && Platform.OS === "web" ? { touchAction: "pan-y" } : undefined}
+        style={scrollPanY && Platform.OS === "web" ? ({ touchAction: "pan-y" } as unknown as any) : undefined}
         contentContainerStyle={styles.body}>
         {canEdit && payload ? (
           <>

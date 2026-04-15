@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { removeVaultObjectKeys, wipeVaultStoragePrefix } from "@/lib/storage";
+
 function pushErr(errors: string[], label: string, message: string | undefined) {
   if (message) errors.push(`${label}: ${message}`);
 }
@@ -13,38 +15,6 @@ async function deleteEq(
 ): Promise<void> {
   const { error } = await supabase.from(table).delete().eq(column, value);
   pushErr(errors, table, error?.message);
-}
-
-/** Remove every object under `prefix` in the vault bucket (single-level + one nested tier: main/decoy/file). */
-async function wipeVaultStoragePrefix(
-  supabase: SupabaseClient,
-  errors: string[],
-  prefix: string,
-): Promise<void> {
-  const bucket = supabase.storage.from("vault");
-  const walk = async (path: string) => {
-    const { data, error } = await bucket.list(path, { limit: 1000 });
-    if (error) {
-      pushErr(errors, `storage.list(${path})`, error.message);
-      return;
-    }
-    const pathsToRemove: string[] = [];
-    for (const item of data ?? []) {
-      const name = item.name;
-      if (!name) continue;
-      const full = path ? `${path}/${name}` : name;
-      if (name.endsWith(".enc")) {
-        pathsToRemove.push(full);
-      } else {
-        await walk(full);
-      }
-    }
-    if (pathsToRemove.length) {
-      const { error: rmErr } = await bucket.remove(pathsToRemove);
-      pushErr(errors, "vault.remove", rmErr?.message);
-    }
-  };
-  await walk(prefix);
 }
 
 async function deleteVaultFoldersForUser(
@@ -123,7 +93,7 @@ export async function purgeAllUserContributions(
   pushErr(errors, "vault_objects select", voSelErr?.message);
   const paths = (vaultRows ?? []).map((r) => r.storage_path as string).filter(Boolean);
   if (paths.length) {
-    const { error: stErr } = await supabase.storage.from("vault").remove(paths);
+    const { error: stErr } = await removeVaultObjectKeys(supabase, paths);
     pushErr(errors, "vault storage remove (indexed)", stErr?.message);
   }
   await deleteEq(supabase, "vault_objects", "owner_id", profileId, errors);

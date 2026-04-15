@@ -33,7 +33,6 @@ export default function CallsignScreen() {
   const router = useRouter();
   const profileId = useMMStore((s) => s.profileId);
   const supabase = useMMStore((s) => s.supabase);
-  const setupComplete = useMMStore((s) => s.setupComplete);
   const syncMmProfileRow = useMMStore((s) => s.syncMmProfileRow);
 
   const [draft, setDraft] = useState("");
@@ -41,9 +40,8 @@ export default function CallsignScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const goNext = async () => {
-    const next = (setupComplete ? "/(auth)/unlock" : "/(auth)/setup") as Href;
     await runAfterInteractionsWebSafe();
-    router.replace(next);
+    router.replace("/(app)/home" as Href);
   };
 
   const save = async () => {
@@ -118,7 +116,7 @@ export default function CallsignScreen() {
     <KeyboardAvoidingView
       style={[styles.shell, { backgroundColor: TacticalPalette.matteBlack }]}
       behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : 0}>
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : insets.top + 12}>
       <ScrollView
         contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 120 }]}
         keyboardShouldPersistTaps="handled"

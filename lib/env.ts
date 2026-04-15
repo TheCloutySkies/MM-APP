@@ -8,6 +8,13 @@ type ExpoPublicPayload = {
   EXPO_PUBLIC_MM_MAP_SHARED_KEY?: string;
   EXPO_PUBLIC_SUPERMAP_API_URL?: string;
   EXPO_PUBLIC_MM_GEO_PROXY_URL?: string;
+  EXPO_PUBLIC_S3_ENDPOINT?: string;
+  EXPO_PUBLIC_S3_ACCESS_KEY?: string;
+  EXPO_PUBLIC_S3_SECRET_KEY?: string;
+  EXPO_PUBLIC_S3_BUCKET?: string;
+  EXPO_PUBLIC_S3_REGION?: string;
+  EXPO_PUBLIC_S3_FORCE_PATH_STYLE?: string;
+  EXPO_PUBLIC_CHAT_ENDPOINT?: string;
 };
 
 /** Cloudflare Worker injects this on HTML responses (see worker/index.js). Do not gate on Platform.OS — RN Web can differ from browser during early loads. */
@@ -101,4 +108,99 @@ export function getMmGeoProxyUrl(): string | undefined {
     "";
   if (!raw?.trim()) return undefined;
   return raw.replace(/\/$/, "");
+}
+
+/**
+ * S3-compatible API base URL (no trailing slash).
+ * For Cloudflare R2 use `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (see R2 dashboard → S3 API).
+ */
+export function getS3Endpoint(): string {
+  return (
+    readWebInjected("EXPO_PUBLIC_S3_ENDPOINT") ??
+    readExtra("EXPO_PUBLIC_S3_ENDPOINT") ??
+    process.env.EXPO_PUBLIC_S3_ENDPOINT ??
+    ""
+  ).trim();
+}
+
+function isCloudflareR2NativeApiHost(endpoint: string): boolean {
+  try {
+    return /\.r2\.cloudflarestorage\.com$/i.test(new URL(endpoint).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * R2 requires `auto` per Cloudflare docs. Other S3-compatible servers often use `us-east-1`.
+ * If unset, inferred from endpoint hostname (`.r2.cloudflarestorage.com` → `auto`, else `us-east-1`).
+ */
+export function getS3Region(): string {
+  const raw = (
+    readWebInjected("EXPO_PUBLIC_S3_REGION") ??
+    readExtra("EXPO_PUBLIC_S3_REGION") ??
+    process.env.EXPO_PUBLIC_S3_REGION ??
+    ""
+  ).trim();
+  if (raw) return raw;
+  const ep = getS3Endpoint();
+  if (isCloudflareR2NativeApiHost(ep)) return "auto";
+  return "us-east-1";
+}
+
+/**
+ * R2 defaults to virtual-hosted-style requests (omit path-style). MinIO and some proxies need path-style.
+ * If unset: `false` for native R2 API hosts, `true` otherwise. Override with `true` / `false` / `1` / `0`.
+ */
+export function getS3ForcePathStyle(): boolean {
+  const raw = (
+    readWebInjected("EXPO_PUBLIC_S3_FORCE_PATH_STYLE") ??
+    readExtra("EXPO_PUBLIC_S3_FORCE_PATH_STYLE") ??
+    process.env.EXPO_PUBLIC_S3_FORCE_PATH_STYLE ??
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  if (raw === "true" || raw === "1" || raw === "yes") return true;
+  if (raw === "false" || raw === "0" || raw === "no") return false;
+  const ep = getS3Endpoint();
+  if (isCloudflareR2NativeApiHost(ep)) return false;
+  return true;
+}
+
+export function getS3AccessKey(): string {
+  return (
+    readWebInjected("EXPO_PUBLIC_S3_ACCESS_KEY") ??
+    readExtra("EXPO_PUBLIC_S3_ACCESS_KEY") ??
+    process.env.EXPO_PUBLIC_S3_ACCESS_KEY ??
+    ""
+  ).trim();
+}
+
+export function getS3SecretKey(): string {
+  return (
+    readWebInjected("EXPO_PUBLIC_S3_SECRET_KEY") ??
+    readExtra("EXPO_PUBLIC_S3_SECRET_KEY") ??
+    process.env.EXPO_PUBLIC_S3_SECRET_KEY ??
+    ""
+  ).trim();
+}
+
+export function getS3Bucket(): string {
+  return (
+    readWebInjected("EXPO_PUBLIC_S3_BUCKET") ??
+    readExtra("EXPO_PUBLIC_S3_BUCKET") ??
+    process.env.EXPO_PUBLIC_S3_BUCKET ??
+    ""
+  ).trim();
+}
+
+/** Socket.io chat server base URL (no trailing slash). */
+export function getChatEndpoint(): string {
+  const raw =
+    readWebInjected("EXPO_PUBLIC_CHAT_ENDPOINT") ??
+    readExtra("EXPO_PUBLIC_CHAT_ENDPOINT") ??
+    process.env.EXPO_PUBLIC_CHAT_ENDPOINT ??
+    "";
+  return raw.trim().replace(/\/$/, "");
 }

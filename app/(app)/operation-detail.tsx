@@ -48,7 +48,9 @@ import {
     type SpotrepPayloadV1,
     type TargetPackagePayloadV1,
 } from "@/lib/opsReports";
-import { collectOpsDecryptCandidates, resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
+import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 
 type HubRow = {
   id: string;
@@ -82,23 +84,18 @@ export default function OperationDetailScreen() {
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
-
-  const teamMapSharedKeyHex = useMMStore((s) => s.teamMapSharedKeyHex);
 
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex]);
+  }, [vaultMode]);
 
-  const decryptCandidates = useMemo(
-    () => collectOpsDecryptCandidates(mainKey, decoyKey, vaultMode),
-    [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex],
-  );
+  const decryptCandidates = useMemo(() => (mapKey ? [mapKey] : []), [mapKey]);
 
   const [tab, setTab] = useState<TabKey>("reports");
   const [hubRow, setHubRow] = useState<HubRow | null>(null);

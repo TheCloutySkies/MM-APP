@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { pinHashHex } from "@/lib/calendar/pinHash";
-import { SK, secureSet } from "@/lib/secure/mmSecureStore";
+import { SK, secureGet, secureSet } from "@/lib/secure/mmSecureStore";
 
 function randomSaltHex(): string {
   const a = new Uint8Array(16);
@@ -60,6 +60,30 @@ export async function fetchCalendarProfileRow(
 
   if (error) return { data: null, error: new Error(error.message) };
   return { data: data as CalendarProfileCryptoRow | null, error: null };
+}
+
+/**
+ * After login / refresh: copy calendar PIN hashes + salts from `mm_profiles` into secure device storage
+ * when the server has them but local keys are missing (e.g. web storage cleared while the auth session remains).
+ */
+export async function syncCalendarSecretsFromServerToDevice(
+  supabase: SupabaseClient,
+  profileId: string,
+): Promise<void> {
+  const { data, error } = await fetchCalendarProfileRow(supabase, profileId);
+  if (error || !data) return;
+
+  const [lp, ld, lsp, lsd] = await Promise.all([
+    secureGet(SK.primaryPinHash),
+    secureGet(SK.duressPinHash),
+    secureGet(SK.calendarSaltPrimary),
+    secureGet(SK.calendarSaltDuress),
+  ]);
+
+  if (!lp && data.primary_pin_hash) await secureSet(SK.primaryPinHash, data.primary_pin_hash);
+  if (!ld && data.duress_pin_hash) await secureSet(SK.duressPinHash, data.duress_pin_hash);
+  if (!lsp && data.calendar_salt_primary) await secureSet(SK.calendarSaltPrimary, data.calendar_salt_primary);
+  if (!lsd && data.calendar_salt_duress) await secureSet(SK.calendarSaltDuress, data.calendar_salt_duress);
 }
 
 /** Backfill salts/hashes on unlock (one branch at a time). */

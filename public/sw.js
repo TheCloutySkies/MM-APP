@@ -3,7 +3,8 @@
  * MM tactical PWA — runtime cache for same-origin shell (Expo static export on Cloudflare).
  * Does not cache third-party map tiles (see future offline region downloader).
  */
-const CACHE_NAME = "mm-app-shell-v1";
+// Bump this whenever a deploy needs to invalidate old cached bundles.
+const CACHE_NAME = "mm-app-shell-v2";
 
 self.addEventListener("install", () => {
   self.skipWaiting();

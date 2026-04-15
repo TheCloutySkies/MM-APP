@@ -37,6 +37,13 @@ module.exports = {
       EXPO_PUBLIC_MM_MAP_SHARED_KEY: envMapKey || wranglerPublic.mapKey || "",
       EXPO_PUBLIC_SUPERMAP_API_URL: process.env.EXPO_PUBLIC_SUPERMAP_API_URL ?? "",
       EXPO_PUBLIC_MM_GEO_PROXY_URL: process.env.EXPO_PUBLIC_MM_GEO_PROXY_URL ?? "",
+      EXPO_PUBLIC_S3_ENDPOINT: process.env.EXPO_PUBLIC_S3_ENDPOINT ?? "",
+      EXPO_PUBLIC_S3_ACCESS_KEY: process.env.EXPO_PUBLIC_S3_ACCESS_KEY ?? "",
+      EXPO_PUBLIC_S3_SECRET_KEY: process.env.EXPO_PUBLIC_S3_SECRET_KEY ?? "",
+      EXPO_PUBLIC_S3_BUCKET: process.env.EXPO_PUBLIC_S3_BUCKET ?? "",
+      EXPO_PUBLIC_S3_REGION: process.env.EXPO_PUBLIC_S3_REGION ?? "",
+      EXPO_PUBLIC_S3_FORCE_PATH_STYLE: process.env.EXPO_PUBLIC_S3_FORCE_PATH_STYLE ?? "",
+      EXPO_PUBLIC_CHAT_ENDPOINT: process.env.EXPO_PUBLIC_CHAT_ENDPOINT ?? "",
     },
   },
 };

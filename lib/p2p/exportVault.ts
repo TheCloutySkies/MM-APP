@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { aes256GcmEncrypt, encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { utf8 } from "@/lib/crypto/bytes";
+import { getVaultObjectBlob } from "@/lib/storage";
 
 export type VaultExportBundle = {
   version: 1;
@@ -26,9 +27,7 @@ export async function buildEncryptedVaultExport(options: {
 
   const objects: VaultExportBundle["objects"] = [];
   for (const row of rows ?? []) {
-    const { data: blob, error: dlErr } = await options.supabase.storage
-      .from("vault")
-      .download(row.storage_path);
+    const { data: blob, error: dlErr } = await getVaultObjectBlob(options.supabase, row.storage_path);
     if (dlErr || !blob) continue;
     const buf = new Uint8Array(await blob.arrayBuffer());
     const inner = aes256GuardPack(buf, options.exportKey32);

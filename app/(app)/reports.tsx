@@ -14,6 +14,8 @@ import { TargetPackageModal } from "@/components/ops/TargetPackageModal";
 import { TacticalBlock } from "@/components/shell/TacticalBlock";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
 export default function ReportsScreen() {
@@ -26,16 +28,16 @@ export default function ReportsScreen() {
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
 
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [vaultMode]);
 
   const [showSitrepModal, setShowSitrepModal] = useState(false);
   const [showAarModal, setShowAarModal] = useState(false);

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { base64ToBytes } from "@/lib/crypto/bytes";
+import { putVaultObject } from "@/lib/storage";
 import type { VaultOutboxRecord } from "@/lib/e2ee/localStore";
 import { classifyOutboxInsertError, type OutboxHaltCategory } from "@/lib/e2ee/outboxSync";
 
@@ -40,7 +41,7 @@ export async function flushVaultOutboxSequential(
 
     const bytes = base64ToBytes(item.file_payload_b64);
 
-    const { error: upErr } = await supabase.storage.from("vault").upload(item.storage_path, bytes, {
+    const { error: upErr } = await putVaultObject(supabase, profileId, item.storage_path, bytes, {
       contentType: "application/octet-stream",
       upsert: true,
     });

@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps 
 import {
     ActivityIndicator,
     Alert,
-    FlatList,
     Image,
     Modal,
     Platform,
@@ -18,6 +17,10 @@ import {
     View,
     useColorScheme,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
+import { BottomSheetBackdrop, BottomSheetModal } from "@gorhom/bottom-sheet";
+
+const AnyFlashList: any = FlashList;
 
 import { PanicButton } from "@/components/PanicButton";
 import { VaultDriveBreadcrumbs, type VaultCrumb } from "@/components/vault/VaultDriveBreadcrumbs";
@@ -27,8 +30,10 @@ import { VaultLightbox, type VaultLightboxEntry, type VaultLightboxRow } from "@
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useActivityLogger } from "@/hooks/useActivityLogger";
-import { aes256GcmDecrypt, decryptUtf8, encryptUtf8, type AeadBundle } from "@/lib/crypto/aesGcm";
-import { utf8, utf8decode } from "@/lib/crypto/bytes";
+import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
+import { utf8decode } from "@/lib/crypto/bytes";
 import { loadVaultOutbox, type VaultOutboxRecord } from "@/lib/e2ee/localStore";
 import {
     loadVaultOpsSnapshot,
@@ -37,6 +42,7 @@ import {
     saveVaultPrivateSnapshot,
 } from "@/lib/offline/vaultWebCache";
 import { isWebOnline } from "@/lib/offline/webOnline";
+import { getVaultObjectBlob, removeVaultObjectKeys } from "@/lib/storage";
 import {
     OPS_AAD,
     VAULT_FOLDER_NAME_AAD,
@@ -146,15 +152,6 @@ type OpsReportRow = {
 
 type VaultSection = "private" | OpsDocKind;
 
-function useActiveVaultKey() {
-  const mode = useMMStore((s) => s.vaultMode);
-  const main = useMMStore((s) => s.mainVaultKey);
-  const decoy = useMMStore((s) => s.decoyVaultKey);
-  if (mode === "main") return main;
-  if (mode === "decoy") return decoy;
-  return null;
-}
-
 function sectionTitle(s: VaultSection): string {
   switch (s) {
     case "private":
@@ -199,18 +196,17 @@ export default function VaultScreen() {
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const vaultMode = useMMStore((s) => s.vaultMode);
-  const touchRealUnlock = useMMStore((s) => s.touchRealUnlock);
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
-  const key = useActiveVaultKey();
+  const key = null;
 
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [vaultMode]);
 
   const { logAction } = useActivityLogger();
   const vaultFocusObjectId = useMMStore((s) => s.vaultFocusObjectId);
@@ -229,6 +225,8 @@ export default function VaultScreen() {
   const [renameDraft, setRenameDraft] = useState("");
   const [moveTarget, setMoveTarget] = useState<VaultObjectRow | null>(null);
   const [moreMenuRow, setMoreMenuRow] = useState<VaultObjectRow | null>(null);
+  const moreSheetRef = useRef<BottomSheetModal>(null);
+  const moreSheetSnapPoints = useMemo(() => ["40%"], []);
   const [opsRows, setOpsRows] = useState<OpsReportRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -245,8 +243,8 @@ export default function VaultScreen() {
   const [lightbox, setLightbox] = useState<{ entries: VaultLightboxEntry[]; index: number } | null>(null);
   const lastActivateRef = useRef<{ id: string; t: number }>({ id: "", t: 0 });
 
-  const partition = (vaultMode === "decoy" ? "decoy" : "main") as VaultPartition;
-  const prefix = vaultMode ?? "main";
+  const partition = "main" as VaultPartition;
+  const prefix = "main";
 
   const reloadQueued = useCallback(async () => {
     if (Platform.OS !== "web") {
@@ -383,8 +381,8 @@ export default function VaultScreen() {
     useCallback(() => {
       void refresh();
       void reloadQueued();
-      if (vaultMode === "main") void touchRealUnlock();
-    }, [refresh, reloadQueued, touchRealUnlock, vaultMode]),
+      // Secure-cloud pivot: no vault unlock state to “touch”.
+    }, [refresh, reloadQueued, vaultMode]),
   );
 
   useEffect(() => {
@@ -398,25 +396,12 @@ export default function VaultScreen() {
   }, [reloadQueued, refreshPrivate]);
 
   useEffect(() => {
-    if (!key || key.length !== 32) {
-      setThumbUrlById((prev) => {
-        Object.values(prev).forEach((u) => {
-          try {
-            URL.revokeObjectURL(u);
-          } catch {
-            /* ignore */
-          }
-        });
-        return {};
-      });
-      return;
-    }
     const next: Record<string, string> = {};
     for (const r of rows) {
       const meta = pickVaultMetaRow(r);
       const encT = meta?.encrypted_thumbnail;
       if (!encT) continue;
-      const u = decryptVaultThumbnailToObjectUrl(key, encT, partition);
+      const u = decryptVaultThumbnailToObjectUrl(encT);
       if (u) next[r.id] = u;
     }
     setThumbUrlById((prev) => {
@@ -438,20 +423,19 @@ export default function VaultScreen() {
         }
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuild thumbs when rows/key/partition change
-  }, [rows, key, partition]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuild thumbs when rows change
+  }, [rows]);
 
   const remoteMetaById = useMemo(() => {
     const m = new Map<string, ReturnType<typeof decryptVaultMetaJson>>();
-    if (!key || key.length !== 32) return m;
     for (const r of rows) {
       const meta = pickVaultMetaRow(r);
       if (!meta?.encrypted_meta) continue;
-      const parsed = decryptVaultMetaJson(key, meta.encrypted_meta, partition);
+      const parsed = decryptVaultMetaJson(meta.encrypted_meta);
       if (parsed) m.set(r.id, parsed);
     }
     return m;
-  }, [rows, key, partition]);
+  }, [rows, partition]);
 
   const formatBytes = (n: number) => {
     if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -466,8 +450,8 @@ export default function VaultScreen() {
   };
 
   const uploadVaultFiles = async (files: { bytes: Uint8Array; name: string; mime?: string; file?: File }[]) => {
-    if (!supabase || !profileId || !key || key.length !== 32) {
-      Alert.alert("Vault", "Unlock your Vault to add files.");
+    if (!supabase || !profileId) {
+      Alert.alert("Vault", "Sign in to add files.");
       return;
     }
     if (Platform.OS !== "web" && !isWebOnline()) {
@@ -502,7 +486,6 @@ export default function VaultScreen() {
           {
             supabase,
             profileId,
-            vaultKey: key,
             partition,
             parentVaultObjectId: section === "private" && driveNav === "my" ? currentFolderId : null,
             allowOfflineQueue: Platform.OS === "web",
@@ -582,7 +565,7 @@ export default function VaultScreen() {
         const r = snapshot.find((x) => x.id === id);
         if (!r) return true;
         if (r.storage_path) {
-          const { error: stErr } = await supabase.storage.from("vault").remove([r.storage_path]);
+          const { error: stErr } = await removeVaultObjectKeys(supabase, [r.storage_path]);
           if (stErr) {
             Alert.alert("Storage", stErr.message);
             return false;
@@ -649,10 +632,10 @@ export default function VaultScreen() {
 
   const applyRenameVaultObject = useCallback(
     async (row: VaultObjectRow, nextName: string) => {
-      if (!supabase || !key || key.length !== 32) return;
+      if (!supabase) return;
       const raw = pickVaultMetaRow(row);
       if (!raw?.encrypted_meta) return;
-      const enc = reencryptVaultMetaWithFilename(key, raw.encrypted_meta, partition, nextName);
+      const enc = reencryptVaultMetaWithFilename(raw.encrypted_meta, nextName);
       if (!enc) {
         Alert.alert("Vault", "Couldn’t update that name.");
         return;
@@ -661,7 +644,7 @@ export default function VaultScreen() {
       if (error) Alert.alert("Vault", error.message);
       else void refreshPrivate();
     },
-    [supabase, key, partition, refreshPrivate],
+    [supabase, refreshPrivate],
   );
 
   const openOpsRow = (row: OpsReportRow) => {
@@ -866,24 +849,20 @@ export default function VaultScreen() {
 
   const loadDecrypted = useCallback(
     async (row: VaultLightboxRow) => {
-      if (!supabase || !key || key.length !== 32) {
-        throw new Error("Unlock your Vault to open this file.");
-      }
+      if (!supabase) throw new Error("Sign in to open this file.");
       if (!row.storage_path) {
         throw new Error("Nothing to open here.");
       }
-      const { data: file, error } = await supabase.storage.from("vault").download(row.storage_path);
+      const { data: file, error } = await getVaultObjectBlob(supabase, row.storage_path);
       if (error || !file) {
         throw new Error(error?.message ?? "Couldn’t download this file.");
       }
-      const txt = await file.text();
-      const bundle = JSON.parse(txt) as AeadBundle;
-      const plain = aes256GcmDecrypt(key, bundle, utf8(`mm-vault/${prefix}`));
+      const plain = new Uint8Array(await file.arrayBuffer());
       const meta = remoteMetaById.get(row.id);
       const mime = meta?.mimeType ?? "application/octet-stream";
       return { bytes: plain, mime };
     },
-    [supabase, key, prefix, remoteMetaById],
+    [supabase, prefix, remoteMetaById],
   );
 
   const openPrivateRow = useCallback(
@@ -892,8 +871,8 @@ export default function VaultScreen() {
         Alert.alert("You're offline", "Reconnect to open files saved in your Vault.");
         return;
       }
-      if (!supabase || !key || key.length !== 32) {
-        Alert.alert("Vault", "Unlock your Vault to open this file.");
+      if (!supabase) {
+        Alert.alert("Vault", "Sign in to open this file.");
         return;
       }
 
@@ -937,14 +916,12 @@ export default function VaultScreen() {
       setLoading(true);
       try {
         if (!row.storage_path) return;
-        const { data: file, error } = await supabase.storage.from("vault").download(row.storage_path);
+        const { data: file, error } = await getVaultObjectBlob(supabase, row.storage_path);
         if (error || !file) {
           Alert.alert("Couldn’t open file", error?.message ?? "Something went wrong. Try again.");
           return;
         }
-        const txt = await file.text();
-        const bundle = JSON.parse(txt) as AeadBundle;
-        const plain = aes256GcmDecrypt(key, bundle, utf8(`mm-vault/${prefix}`));
+        const plain = new Uint8Array(await file.arrayBuffer());
         const previewText = utf8decode(plain.slice(0, Math.min(4000, plain.length)));
         Alert.alert(
           title + (disp.subtitle ? ` (${disp.subtitle})` : ""),
@@ -964,7 +941,7 @@ export default function VaultScreen() {
         setLoading(false);
       }
     },
-    [supabase, key, remoteMetaById, privateDriveData, prefix, deletePrivateVaultObject],
+    [supabase, remoteMetaById, privateDriveData, prefix, deletePrivateVaultObject],
   );
 
   const openPrivateItem = useCallback((item: PrivateListItem) => {
@@ -1016,7 +993,7 @@ export default function VaultScreen() {
   );
 
   const submitNewVaultFolder = useCallback(async () => {
-    if (!supabase || !profileId || !key || key.length !== 32) return;
+    if (!supabase || !profileId) return;
     const label = newFolderDraft.trim();
     if (!label) {
       Alert.alert("New folder", "Enter a name.");
@@ -1025,7 +1002,6 @@ export default function VaultScreen() {
     const res = await insertVaultFolder({
       supabase,
       profileId,
-      vaultKey: key,
       partition,
       folderName: label,
       parentVaultObjectId: driveNav === "my" ? currentFolderId : null,
@@ -1037,7 +1013,7 @@ export default function VaultScreen() {
     setNewFolderModalOpen(false);
     setNewFolderDraft("");
     void refreshPrivate();
-  }, [supabase, profileId, key, partition, newFolderDraft, driveNav, currentFolderId, refreshPrivate]);
+  }, [supabase, profileId, partition, newFolderDraft, driveNav, currentFolderId, refreshPrivate]);
 
   const moveFolderOptions = useMemo((): { id: string | null; label: string }[] => {
     if (!moveTarget) return [];
@@ -1061,6 +1037,14 @@ export default function VaultScreen() {
     }
     return opts.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
   }, [moveTarget, rows, prefix, remoteMetaById]);
+
+  useEffect(() => {
+    if (!moreMenuRow) {
+      moreSheetRef.current?.dismiss();
+      return;
+    }
+    moreSheetRef.current?.present();
+  }, [moreMenuRow]);
 
   const folderDisplay = useCallback(
     (f: VaultFolderRow) => {
@@ -1539,7 +1523,7 @@ export default function VaultScreen() {
         </View>
       ) : null}
       <VaultFullBleedDropzone
-        disabled={section !== "private" || Platform.OS !== "web" || uploadBusy || !key || key.length !== 32}
+                disabled={section !== "private" || Platform.OS !== "web" || uploadBusy}
         onFiles={(files) => {
           void (async () => {
             const mapped = await Promise.all(
@@ -1768,10 +1752,10 @@ export default function VaultScreen() {
           </View>
 
           {section === "private" ? (
-            <FlatList
+            <AnyFlashList
               style={{ flex: 1 }}
               data={privateDriveData}
-              keyExtractor={(i) =>
+              keyExtractor={(i: DriveRow) =>
                 i.kind === "uploading"
                   ? `up-${i.uploadId}`
                   : i.kind === "queued"
@@ -1779,7 +1763,7 @@ export default function VaultScreen() {
                     : i.row.id
               }
               numColumns={viewMode === "grid" ? 2 : 1}
-              key={`${viewMode}-${driveNav}-${currentFolderId ?? "root"}`}
+              extraData={`${viewMode}-${driveNav}-${currentFolderId ?? "root"}`}
               columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
               ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
               refreshing={refreshing}
@@ -1788,14 +1772,15 @@ export default function VaultScreen() {
                 <Text style={[styles.empty, { color: p.tabIconDefault }]}>{privateEmptyMessage}</Text>
               }
               renderItem={viewMode === "grid" ? renderPrivateDriveGrid : renderPrivateDriveList}
+              estimatedItemSize={viewMode === "grid" ? 168 : 92}
             />
           ) : (
-            <FlatList
+            <AnyFlashList
               style={{ flex: 1 }}
               data={opsFiltered}
-              keyExtractor={(i) => i.id}
+              keyExtractor={(i: OpsReportRow) => i.id}
               numColumns={viewMode === "grid" ? 2 : 1}
-              key={`ops-${viewMode}`}
+              extraData={`ops-${viewMode}`}
               columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
               ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
               refreshing={refreshing}
@@ -1804,6 +1789,7 @@ export default function VaultScreen() {
                 <Text style={[styles.empty, { color: p.tabIconDefault }]}>{emptyCopy}</Text>
               }
               renderItem={viewMode === "grid" ? renderOpsGrid : renderOpsList}
+              estimatedItemSize={viewMode === "grid" ? 168 : 92}
             />
           )}
           </View>
@@ -1914,10 +1900,10 @@ export default function VaultScreen() {
             <Text style={{ color: TacticalPalette.bone, fontWeight: "900", fontSize: 16, paddingHorizontal: 16, paddingBottom: 8 }}>
               Move to…
             </Text>
-            <FlatList
+            <AnyFlashList
               data={moveFolderOptions}
-              keyExtractor={(it, idx) => `${it.id ?? "root"}-${idx}`}
-              renderItem={({ item: opt }) => (
+              keyExtractor={(it: { id: string | null; label: string }, idx: number) => `${it.id ?? "root"}-${idx}`}
+              renderItem={({ item: opt }: { item: { id: string | null; label: string } }) => (
                 <Pressable
                   onPress={() => {
                     if (!moveTarget) return;
@@ -1928,6 +1914,7 @@ export default function VaultScreen() {
                   <Text style={{ color: TacticalPalette.bone, fontWeight: "700" }}>{opt.label}</Text>
                 </Pressable>
               )}
+              estimatedItemSize={48}
             />
             <Pressable onPress={() => setMoveTarget(null)} style={{ padding: 14, alignItems: "center" }}>
               <Text style={{ color: TacticalPalette.boneMuted, fontWeight: "800" }}>Cancel</Text>
@@ -1936,67 +1923,61 @@ export default function VaultScreen() {
         </View>
       </Modal>
 
-      <Modal visible={moreMenuRow != null} transparent animationType="fade" onRequestClose={() => setMoreMenuRow(null)}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }} onPress={() => setMoreMenuRow(null)}>
-          <View
-            style={{
-              marginTop: 120,
-              marginHorizontal: 24,
-              backgroundColor: TacticalPalette.elevated,
-              borderRadius: 14,
-              borderWidth: 1,
-              borderColor: TacticalPalette.border,
-              overflow: "hidden",
-              maxWidth: 360,
-              alignSelf: "center",
-              width: "100%",
-            }}>
-            {moreMenuRow ? (
-              <>
+      <BottomSheetModal
+        ref={moreSheetRef}
+        snapPoints={moreSheetSnapPoints}
+        onDismiss={() => setMoreMenuRow(null)}
+        backdropComponent={(props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />}
+        backgroundStyle={{ backgroundColor: TacticalPalette.elevated, borderColor: TacticalPalette.border, borderWidth: 1 }}
+        handleIndicatorStyle={{ backgroundColor: TacticalPalette.boneMuted }}
+        // @ts-expect-error - fabric/portal guardrail (prop may be untyped depending on version)
+        disableFullWindowOverlay={Platform.OS === "ios"}>
+        <View style={{ paddingVertical: 6 }}>
+          {moreMenuRow ? (
+            <>
+              <Pressable
+                onPress={() => {
+                  const t = remoteMetaById.get(moreMenuRow.id)?.filename ?? "";
+                  setRenameDraft(t);
+                  setRenameTarget(moreMenuRow);
+                  setMoreMenuRow(null);
+                }}
+                style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
+                <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Rename</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setMoveTarget(moreMenuRow);
+                  setMoreMenuRow(null);
+                }}
+                style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
+                <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Move to…</Text>
+              </Pressable>
+              {driveNav === "trash" ? (
                 <Pressable
                   onPress={() => {
-                    const t = remoteMetaById.get(moreMenuRow.id)?.filename ?? "";
-                    setRenameDraft(t);
-                    setRenameTarget(moreMenuRow);
+                    void restoreVaultObject(moreMenuRow);
                     setMoreMenuRow(null);
                   }}
                   style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
-                  <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Rename</Text>
+                  <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Restore</Text>
                 </Pressable>
-                <Pressable
-                  onPress={() => {
-                    setMoveTarget(moreMenuRow);
-                    setMoreMenuRow(null);
-                  }}
-                  style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
-                  <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Move to…</Text>
-                </Pressable>
-                {driveNav === "trash" ? (
-                  <Pressable
-                    onPress={() => {
-                      void restoreVaultObject(moreMenuRow);
-                      setMoreMenuRow(null);
-                    }}
-                    style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
-                    <Text style={{ color: TacticalPalette.bone, fontWeight: "800" }}>Restore</Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={() => {
-                    if (driveNav === "trash") void deletePrivateVaultObject(moreMenuRow);
-                    else void softTrashVaultObject(moreMenuRow);
-                    setMoreMenuRow(null);
-                  }}
-                  style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
-                  <Text style={{ color: "#e07070", fontWeight: "900" }}>
-                    {driveNav === "trash" ? "Delete forever" : "Move to Trash"}
-                  </Text>
-                </Pressable>
-              </>
-            ) : null}
-          </View>
-        </Pressable>
-      </Modal>
+              ) : null}
+              <Pressable
+                onPress={() => {
+                  if (driveNav === "trash") void deletePrivateVaultObject(moreMenuRow);
+                  else void softTrashVaultObject(moreMenuRow);
+                  setMoreMenuRow(null);
+                }}
+                style={{ paddingVertical: 14, paddingHorizontal: 16 }}>
+                <Text style={{ color: "#e07070", fontWeight: "900" }}>
+                  {driveNav === "trash" ? "Delete forever" : "Move to Trash"}
+                </Text>
+              </Pressable>
+            </>
+          ) : null}
+        </View>
+      </BottomSheetModal>
 
       <VaultLightbox
         visible={lightbox != null && (lightbox.entries?.length ?? 0) > 0}

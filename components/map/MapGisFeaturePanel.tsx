@@ -22,7 +22,9 @@ import {
   type OperationHubPayloadV1,
   tryDecryptUtf8WithKeys,
 } from "@/lib/opsReports";
-import { collectOpsDecryptCandidates, useMMStore, type VaultMode } from "@/store/mmStore";
+import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 
 import { ensureFeatureId } from "@/lib/gis/gisTypes";
 
@@ -99,14 +101,16 @@ export function MapGisFeaturePanel({
   const router = useRouter();
   const supabase = useMMStore((s) => s.supabase);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
-  const teamMapSharedKeyHex = useMMStore((s) => s.teamMapSharedKeyHex);
 
-  const decryptCandidates = useMemo(
-    () => collectOpsDecryptCandidates(mainKey, decoyKey, vaultMode),
-    [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex],
-  );
+  const decryptCandidates = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return [];
+    try {
+      return [hexToBytes(hex)];
+    } catch {
+      return [];
+    }
+  }, [vaultMode]);
 
   const p = propsOf(feature);
   const mmId = String(p.mmId ?? "—");
@@ -273,7 +277,7 @@ export function MapGisFeaturePanel({
       <ScrollView
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        style={scrollPanY && Platform.OS === "web" ? { touchAction: "pan-y" } : undefined}
+        style={scrollPanY && Platform.OS === "web" ? ({ touchAction: "pan-y" } as unknown as any) : undefined}
         contentContainerStyle={styles.body}>
         <Text style={[styles.meta, { color: chrome.textMuted }]}>Name</Text>
         <TextInput

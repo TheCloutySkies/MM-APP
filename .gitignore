@@ -45,6 +45,9 @@ supabase/.secrets.env.tmp
 # Cloudflare Wrangler (local state)
 .wrangler/
 
+# local sqlite
+*.db
+
 # typescript
 *.tsbuildinfo
 

@@ -1,5 +1,5 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
     Alert,
     Platform,
@@ -29,6 +29,8 @@ import {
     whisperEncrypt,
 } from "@/lib/signals/whisper";
 import { useMMStore } from "@/store/mmStore";
+import { resolveMapEncryptKey } from "@/store/mmStore";
+import { getMapSharedKeyHex } from "@/lib/env";
 
 type Mode = "encode" | "decode";
 
@@ -801,11 +803,15 @@ function WhisperPane({ mode }: { mode: Mode }) {
   const scheme = useColorScheme() ?? "light";
   const p = Colors[scheme];
   const username = useMMStore((s) => s.username);
-  const vaultMode = useMMStore((s) => s.vaultMode);
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
-
-  const activeKey = vaultMode === "main" ? mainKey : vaultMode === "decoy" ? decoyKey : null;
+  const activeKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
+    try {
+      return hexToBytes(hex);
+    } catch {
+      return null;
+    }
+  }, []);
 
   const [myPub, setMyPub] = useState("");
   const [peerPub, setPeerPub] = useState("");
@@ -816,7 +822,7 @@ function WhisperPane({ mode }: { mode: Mode }) {
   const canUse = Platform.OS === "web" && !!activeKey && activeKey.length === 32;
 
   const loadMyKey = async (): Promise<CryptoKeyPair> => {
-    if (!activeKey || activeKey.length !== 32) throw new Error("Unlock your vault (main/decoy) to access your whisper key.");
+    if (!activeKey || activeKey.length !== 32) throw new Error("Set the shared team key in Settings to access your whisper key.");
     const stored = await idbGet<StoredWhisperPriv>(WHISPER_PRIV_KEY_IDB_KEY);
     if (!stored) throw new Error("No private key stored. Generate one first.");
     const pkcs8 = await aesGcmDecryptWithRawKey(activeKey, stored, WHISPER_PRIV_AAD);

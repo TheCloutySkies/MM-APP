@@ -16,6 +16,8 @@ import { OperationHubModal } from "@/components/ops/OperationHubModal";
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8 } from "@/lib/crypto/aesGcm";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 import {
     OPERATION_HUB_AAD,
     OPS_AAD,
@@ -26,7 +28,7 @@ import {
     type OperationHubPayloadV1,
     type OpsDocKind,
 } from "@/lib/opsReports";
-import { collectOpsDecryptCandidates, resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
+import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 
 type LegacyMissionRow = { id: string; ciphertext: string; created_at: string; owner_id: string };
 
@@ -67,26 +69,18 @@ export default function MissionsScreen() {
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
-
-  const teamMapSharedKeyHex = useMMStore((s) => s.teamMapSharedKeyHex);
 
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex]);
+  }, [vaultMode]);
 
-  const decryptCandidates = useMemo(
-    () => collectOpsDecryptCandidates(mainKey, decoyKey, vaultMode),
-    [mainKey, decoyKey, vaultMode, teamMapSharedKeyHex],
-  );
-
-  const activeVaultKey =
-    vaultMode === "main" ? mainKey : vaultMode === "decoy" ? decoyKey : null;
+  const decryptCandidates = useMemo(() => (mapKey ? [mapKey] : []), [mapKey]);
 
   const [legacyRows, setLegacyRows] = useState<LegacyMissionRow[]>([]);
   const [opsRows, setOpsRows] = useState<OpsRow[]>([]);
@@ -208,11 +202,11 @@ export default function MissionsScreen() {
   const openRow = (item: CombinedRow) => {
     try {
       if (item.source === "legacy") {
-        if (!activeVaultKey || activeVaultKey.length !== 32) {
-          Alert.alert("Legacy folder", "Unlock the vault partition used when this mission was created.");
+        if (!mapKey || mapKey.length !== 32) {
+          Alert.alert("Legacy folder", "Set the shared team key in Settings to open legacy missions.");
           return;
         }
-        const json = decryptUtf8(activeVaultKey, item.ciphertext, "mm-mission");
+        const json = decryptUtf8(mapKey, item.ciphertext, "mm-mission");
         const body = JSON.parse(json) as { name?: string; members?: string[] };
         const members = Array.isArray(body.members) ? body.members.join(", ") : "";
         const ownLegacy = profileId != null && item.owner_id === profileId;
@@ -360,9 +354,9 @@ export default function MissionsScreen() {
               title = j ? previewOpsRow("mission_plan", j) : "(cannot decrypt)";
             }
             sub = `${item.author_username} · ${item.created_at}`;
-          } else if (item.source === "legacy" && activeVaultKey?.length === 32) {
+          } else if (item.source === "legacy" && mapKey?.length === 32) {
             try {
-              const json = decryptUtf8(activeVaultKey, item.ciphertext, "mm-mission");
+              const json = decryptUtf8(mapKey, item.ciphertext, "mm-mission");
               title = (JSON.parse(json) as { name: string }).name;
               sub = `Legacy · ${item.created_at}`;
             } catch {

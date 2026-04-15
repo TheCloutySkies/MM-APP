@@ -13,6 +13,7 @@ import {
     View,
     useWindowDimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { LayoutOverrideBar } from "@/components/layout/LayoutOverrideBar";
 import { TacticalPalette } from "@/constants/TacticalTheme";
@@ -26,6 +27,7 @@ import { useMMStore } from "@/store/mmStore";
 type AuthMode = "signIn" | "signUp";
 
 export default function LoginScreen() {
+  const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const mmSize = Math.min(168, Math.max(88, width * 0.32));
   const router = useRouter();
@@ -44,13 +46,12 @@ export default function LoginScreen() {
 
   const goNextAfterSession = async () => {
     await runAfterInteractionsWebSafe();
-    const { callsignOk, setupComplete } = useMMStore.getState();
+    const { callsignOk } = useMMStore.getState();
     if (!callsignOk) {
       router.replace("/(auth)/callsign" as Href);
       return;
     }
-    const next = (setupComplete ? "/(auth)/unlock" : "/(auth)/setup") as Href;
-    router.replace(next);
+    router.replace("/(app)/home" as Href);
   };
 
   const submitEmailAuth = async () => {
@@ -147,8 +148,8 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView
       style={[styles.shell, { backgroundColor: TacticalPalette.matteBlack }]}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}>
+      behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : insets.top + 12}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"

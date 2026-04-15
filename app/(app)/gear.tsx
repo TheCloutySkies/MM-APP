@@ -16,6 +16,8 @@ import {
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { encryptUtf8, decryptUtf8 } from "@/lib/crypto/aesGcm";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 import {
   GEAR_LOADOUT_AAD,
   GEAR_LOADOUT_TYPES,
@@ -48,16 +50,16 @@ export default function GearScreen() {
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
 
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [vaultMode]);
 
   const [rows, setRows] = useState<Row[]>([]);
   const [loadoutName, setLoadoutName] = useState("");

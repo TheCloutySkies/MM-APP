@@ -8,6 +8,8 @@ import { TacticalSandTableModal } from "@/components/sand-table/TacticalSandTabl
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 
 /**
  * Product entry for the **Sand Table Route Creator** (tactical sketch / digital sand table).
@@ -19,15 +21,15 @@ export default function SandTableScreen() {
   const p = Colors[scheme];
   const sch = scheme === "dark" ? "dark" : "light";
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [vaultMode]);
   const [sandOpen, setSandOpen] = useState(false);
 
   return (

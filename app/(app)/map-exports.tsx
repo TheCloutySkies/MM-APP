@@ -17,6 +17,8 @@ import {
 import Colors from "@/constants/Colors";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8 } from "@/lib/crypto/aesGcm";
+import { hexToBytes } from "@/lib/crypto/bytes";
+import { getMapSharedKeyHex } from "@/lib/env";
 import { buildGpxFromTacticalPayloads } from "@/lib/gpx";
 import { normalizeTacticalPayload, type TacticalMapPayload } from "@/lib/mapMarkers";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
@@ -40,16 +42,16 @@ export default function MapExportsScreen() {
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
-  const mainKey = useMMStore((s) => s.mainVaultKey);
-  const decoyKey = useMMStore((s) => s.decoyVaultKey);
 
   const mapKey = useMemo(() => {
+    const hex = resolveMapEncryptKey() ?? getMapSharedKeyHex();
+    if (!hex || hex.length !== 64) return null;
     try {
-      return resolveMapEncryptKey(mainKey, decoyKey, vaultMode);
+      return hexToBytes(hex);
     } catch {
       return null;
     }
-  }, [mainKey, decoyKey, vaultMode]);
+  }, [vaultMode]);
 
   const [rows, setRows] = useState<ExportRow[]>([]);
   const [title, setTitle] = useState("");
