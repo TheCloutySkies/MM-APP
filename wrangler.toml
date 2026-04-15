@@ -8,6 +8,7 @@
 name = "mm-app"
 main = "worker/index.js"
 compatibility_date = "2026-04-01"
+account_id = "def9bde2fbe069f2a83015206aaf0758"
 
 # Workers Logs + invocation logs (dashboard: Worker → Observability).
 # https://developers.cloudflare.com/workers/observability/logs/workers-logs/
