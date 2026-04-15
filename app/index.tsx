@@ -3,11 +3,12 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 
 import { TacticalPalette } from "@/constants/TacticalTheme";
-import { getAuthSupabase } from "@/lib/supabase/authSupabase";
+import { getAuthSupabase, getInitialAuthSession } from "@/lib/supabase/authSupabase";
 import { useMMStore } from "@/store/mmStore";
 
 export default function Index() {
   const hydrate = useMMStore((s) => s.hydrateFromStorage);
+  const hydrated = useMMStore((s) => s.hydrated);
   const callsignOk = useMMStore((s) => s.callsignOk);
   const [sessionOk, setSessionOk] = useState<boolean | null>(null);
 
@@ -17,17 +18,15 @@ export default function Index() {
 
   useEffect(() => {
     let cancelled = false;
-    const client = getAuthSupabase();
-    void client.auth
-      .getSession()
-      .then(({ data }) => {
+    void getInitialAuthSession()
+      .then((session) => {
         if (cancelled) return;
-        setSessionOk(Boolean(data.session?.user));
+        setSessionOk(Boolean(session?.user));
       })
       .catch(() => {
-        if (cancelled) return;
-        setSessionOk(false);
+        if (!cancelled) setSessionOk(false);
       });
+    const client = getAuthSupabase();
     const { data } = client.auth.onAuthStateChange((_evt, session) => {
       if (cancelled) return;
       setSessionOk(Boolean(session?.user));
@@ -38,7 +37,7 @@ export default function Index() {
     };
   }, []);
 
-  if (sessionOk == null) {
+  if (!hydrated || sessionOk == null) {
     return (
       <View
         style={{

@@ -1,4 +1,4 @@
-import type { Session, SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { Dimensions, Platform } from "react-native";
 import { create } from "zustand";
 
@@ -25,7 +25,7 @@ import {
   wipeLocalSecrets,
   wipeSessionTokens,
 } from "@/lib/secure/mmSecureStore";
-import { getAuthSupabase } from "@/lib/supabase/authSupabase";
+import { getAuthSupabase, getInitialAuthSession } from "@/lib/supabase/authSupabase";
 import {
   ensureCalendarSaltOnUnlock,
   syncCalendarSecretsFromServerToDevice,
@@ -380,8 +380,7 @@ export const useMMStore = create<MMState & MMActions>((set, get) => ({
     let supabase: SupabaseClient | null = null;
 
     try {
-      const authClient = getAuthSupabase();
-      const session = await resolveHydrateAuthSession(authClient);
+      const session = await getInitialAuthSession();
       if (session?.user && session.access_token) {
         token = session.access_token;
         profileId = session.user.id;

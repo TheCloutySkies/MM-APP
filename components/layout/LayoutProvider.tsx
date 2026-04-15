@@ -112,11 +112,27 @@ export function LayoutProvider({ children }: Props) {
 
     setLayoutBootstrapReady(false);
     void (async () => {
-      const next = await resolveMergedLayoutPreference(supabase, profileId);
-      if (cancelled) return;
-      await setLayoutTriPreference(next);
-      setPreference(next);
-      if (!cancelled) setLayoutBootstrapReady(true);
+      const LAYOUT_BOOTSTRAP_MS = 12_000;
+      try {
+        const next = await Promise.race([
+          resolveMergedLayoutPreference(supabase, profileId),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error("layout bootstrap timeout")), LAYOUT_BOOTSTRAP_MS);
+          }),
+        ]);
+        if (cancelled) return;
+        await setLayoutTriPreference(next);
+        setPreference(next);
+      } catch (e) {
+        console.warn("[layout] bootstrap failed:", e instanceof Error ? e.message : e);
+        if (!cancelled) {
+          const local = await getLayoutPreferenceAsync();
+          setPreference(local);
+          await useMMStore.getState().setLayoutTriPreference(local);
+        }
+      } finally {
+        if (!cancelled) setLayoutBootstrapReady(true);
+      }
     })();
 
     return () => {
