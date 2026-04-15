@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=MM: Start Services
+Comment=Start MinIO + MM chat server
+Exec=sh -lc 'cd "/home/bb8/Desktop/MM-APP" && chmod +x scripts/mm-up.sh && gnome-terminal -- bash -lc "./scripts/mm-up.sh; echo; echo \"Press Enter to close\"; read"'
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;
+
