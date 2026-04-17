@@ -5,7 +5,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import type { OpsDocKind } from "@/lib/opsReports";
 
-export type VaultDriveNav = "my" | "recent" | "trash";
+export type VaultDriveNav = "my" | "recent" | "trash" | "cloud";
 
 export type VaultDriveSidebarSection = "private" | OpsDocKind;
 
@@ -175,6 +175,41 @@ export function VaultDriveSidebar({
           onSelectSection("private");
           onChangeNav("trash");
         })}
+        <Pressable
+          onPress={() => {
+            onSelectSection("private");
+            onChangeNav("cloud");
+          }}
+          style={({ pressed }) => [
+            styles.navRow,
+            {
+              backgroundColor:
+                activeSection === "private" && driveNav === "cloud"
+                  ? TacticalPalette.panel
+                  : pressed
+                    ? TacticalPalette.charcoal
+                    : "transparent",
+              borderLeftWidth: 3,
+              borderLeftColor:
+                activeSection === "private" && driveNav === "cloud" ? TacticalPalette.accent : "transparent",
+            },
+          ]}>
+          <FontAwesome
+            name="cloud"
+            size={16}
+            color={activeSection === "private" && driveNav === "cloud" ? TacticalPalette.accent : TacticalPalette.boneMuted}
+          />
+          <Text
+            style={[
+              styles.navLabel,
+              {
+                color:
+                  activeSection === "private" && driveNav === "cloud" ? TacticalPalette.bone : TacticalPalette.boneMuted,
+              },
+            ]}>
+            Cloud (MinIO)
+          </Text>
+        </Pressable>
 
         <Text style={[styles.sectionLabel, { marginTop: 16 }]}>Team folders</Text>
         <Text style={styles.sectionHint}>Operations reports (team key)</Text>

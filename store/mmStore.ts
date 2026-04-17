@@ -214,36 +214,6 @@ async function ensureMmProfileRowForAuth(
   return await loadMmProfileRow(supabase, profileId);
 }
 
-/**
- * Hydration must use the same recovery path the client uses for storage-backed sessions.
- * On web, `onAuthStateChange` → `INITIAL_SESSION` tracks GoTrue initialization; some WebKit
- * builds share reports of `getSession()` disagreeing with that first paint window (supabase-js#1560 class of issues).
- */
-async function resolveHydrateAuthSession(client: SupabaseClient): Promise<Session | null> {
-  if (Platform.OS !== "web") {
-    const { data } = await client.auth.getSession();
-    return data.session ?? null;
-  }
-  return await new Promise<Session | null>((resolve) => {
-    let finished = false;
-    let timeoutId: ReturnType<typeof setTimeout>;
-    const { data } = client.auth.onAuthStateChange((event, session) => {
-      if (event !== "INITIAL_SESSION") return;
-      if (finished) return;
-      finished = true;
-      clearTimeout(timeoutId);
-      data.subscription.unsubscribe();
-      resolve(session);
-    });
-    timeoutId = setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      data.subscription.unsubscribe();
-      resolve(null);
-    }, 10_000);
-  });
-}
-
 export const useMMStore = create<MMState & MMActions>((set, get) => ({
   hydrated: false,
   accessToken: null,

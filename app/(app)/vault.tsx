@@ -25,6 +25,7 @@ const AnyFlashList: any = FlashList;
 import { PanicButton } from "@/components/PanicButton";
 import { VaultDriveBreadcrumbs, type VaultCrumb } from "@/components/vault/VaultDriveBreadcrumbs";
 import { VaultDriveSidebar, type VaultDriveNav } from "@/components/vault/VaultDriveSidebar";
+import { S3MinioDrive } from "@/components/vault/S3MinioDrive";
 import { VaultFullBleedDropzone } from "@/components/vault/VaultFullBleedDropzone";
 import { VaultLightbox, type VaultLightboxEntry, type VaultLightboxRow } from "@/components/vault/VaultLightbox";
 import Colors from "@/constants/Colors";
@@ -1523,7 +1524,7 @@ export default function VaultScreen() {
         </View>
       ) : null}
       <VaultFullBleedDropzone
-                disabled={section !== "private" || Platform.OS !== "web" || uploadBusy}
+                disabled={section !== "private" || driveNav === "cloud" || Platform.OS !== "web" || uploadBusy}
         onFiles={(files) => {
           void (async () => {
             const mapped = await Promise.all(
@@ -1553,6 +1554,10 @@ export default function VaultScreen() {
             opsFolders={OPS_DRIVE_FOLDERS}
           />
           <View style={[styles.mainCol, { maxWidth: 1200, flex: 1 }]}>
+          {section === "private" && driveNav === "cloud" ? (
+            <S3MinioDrive />
+          ) : (
+            <>
           <Text style={[styles.breadcrumb, { color: p.tabIconDefault }]}>
             {(vaultMode ?? "main").toUpperCase()} · {sectionTitle(section)}
             {loading ? " · …" : ""}
@@ -1791,6 +1796,8 @@ export default function VaultScreen() {
               renderItem={viewMode === "grid" ? renderOpsGrid : renderOpsList}
               estimatedItemSize={viewMode === "grid" ? 168 : 92}
             />
+          )}
+            </>
           )}
           </View>
         </View>

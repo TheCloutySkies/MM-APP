@@ -8,6 +8,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
@@ -197,6 +198,74 @@ export async function deleteSecureFile(keys: string[]): Promise<{ error: { messa
     return { error: null };
   } catch (e: unknown) {
     return { error: { message: errMsg(e) } };
+  }
+}
+
+export type VaultS3ListObject = {
+  key: string;
+  /** Filename relative to profile prefix (last segment). */
+  name: string;
+  size: number;
+  lastModified: Date | null;
+};
+
+/**
+ * Lists objects directly under `profileId/` (not recursive into “subfolders” as separate calls).
+ * For a flat Drive view of all descendant keys, use `listVaultS3ObjectsFlat`.
+ */
+export async function listVaultS3ObjectsFlat(profileId: string): Promise<{
+  data: VaultS3ListObject[];
+  error: { message: string } | null;
+}> {
+  if (!isVaultS3StorageConfigured()) {
+    return { data: [], error: { message: "Vault storage is not configured. Set EXPO_PUBLIC_S3_* (MinIO)." } };
+  }
+  const pref = `${profileId.replace(/\/$/, "")}/`;
+  try {
+    await awaitVaultBucketReady();
+    const client = vaultS3Client();
+    const Bucket = vaultBucket();
+    const out: VaultS3ListObject[] = [];
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await client.send(
+        new ListObjectsV2Command({
+          Bucket,
+          Prefix: pref,
+          ContinuationToken,
+        }),
+      );
+      for (const o of page.Contents ?? []) {
+        if (!o.Key || o.Key === pref || o.Key.endsWith("/")) continue;
+        const name = o.Key.slice(pref.length);
+        if (!name) continue;
+        out.push({
+          key: o.Key,
+          name,
+          size: Number(o.Size ?? 0),
+          lastModified: o.LastModified ?? null,
+        });
+      }
+      ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+    out.sort((a, b) => (b.lastModified?.getTime() ?? 0) - (a.lastModified?.getTime() ?? 0));
+    return { data: out, error: null };
+  } catch (e: unknown) {
+    return { data: [], error: { message: errMsg(e) } };
+  }
+}
+
+/** Presigned GET for thumbnails / chat images (short TTL). */
+export async function getVaultPresignedGetUrl(key: string, expiresInSec = 3600): Promise<{ url: string | null; error: { message: string } | null }> {
+  try {
+    await awaitVaultBucketReady();
+    const client = vaultS3Client();
+    const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: vaultBucket(), Key: key }), {
+      expiresIn: expiresInSec,
+    });
+    return { url, error: null };
+  } catch (e: unknown) {
+    return { url: null, error: { message: errMsg(e) } };
   }
 }
 
