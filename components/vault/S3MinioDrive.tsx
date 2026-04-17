@@ -13,10 +13,10 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
+import { Card, FAB, IconButton, List, Searchbar } from "react-native-paper";
 
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { useVaultS3Objects, useInvalidateVaultS3 } from "@/hooks/useVaultS3Objects";
@@ -55,6 +55,18 @@ function fileIcon(ext: string): ComponentProps<typeof FontAwesome>["name"] {
   return "file-o";
 }
 
+/** MaterialCommunityIcons name for Paper `List.Icon`. */
+function mciForExt(ext: string): string {
+  if (["png", "jpg", "jpeg", "webp", "gif", "heic"].includes(ext)) return "file-image-outline";
+  if (["pdf"].includes(ext)) return "file-pdf-box";
+  if (["zip", "rar", "7z", "gz"].includes(ext)) return "zip-box-outline";
+  if (["mp4", "mov", "webm", "mkv"].includes(ext)) return "filmstrip-box";
+  if (["mp3", "wav", "ogg", "m4a"].includes(ext)) return "music-box-outline";
+  if (["txt", "md", "log"].includes(ext)) return "file-document-outline";
+  if (["js", "ts", "tsx", "json", "py", "rb", "go", "rs", "c", "h"].includes(ext)) return "code-tags";
+  return "file-outline";
+}
+
 function isImageName(name: string): boolean {
   return ["png", "jpg", "jpeg", "webp", "gif", "heic"].includes(extOf(name));
 }
@@ -76,6 +88,7 @@ export function S3MinioDrive() {
   const invalidate = useInvalidateVaultS3();
 
   const [search, setSearch] = useState("");
+  const [fabOpen, setFabOpen] = useState(false);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return objects;
@@ -83,10 +96,8 @@ export function S3MinioDrive() {
   }, [objects, search]);
 
   const [thumbUrlByKey, setThumbUrlByKey] = useState<Record<string, string>>({});
-  const fabSheetRef = useRef<BottomSheetModal>(null);
   const actionSheetRef = useRef<BottomSheetModal>(null);
   const [actionItem, setActionItem] = useState<VaultS3ListObject | null>(null);
-  const snapFab = useMemo(() => ["32%"], []);
   const snapAct = useMemo(() => ["38%"], []);
 
   const loadThumb = useCallback(
@@ -156,7 +167,7 @@ export function S3MinioDrive() {
 
   const pickAndUpload = useCallback(
     async (mode: "doc" | "media") => {
-      fabSheetRef.current?.dismiss();
+      setFabOpen(false);
       if (!profileId || !supabase) return;
       try {
         if (mode === "media") {
@@ -216,30 +227,25 @@ export function S3MinioDrive() {
       void loadThumb(item);
       const ext = extOf(item.name);
       const thumb = thumbUrlByKey[item.key];
+      const desc = `${formatBytes(item.size)}${item.lastModified ? ` · ${item.lastModified.toLocaleString()}` : ""}`;
       return (
-        <Pressable
-          onPress={() => void openOrShare(item)}
-          style={({ pressed }) => [styles.listRow, pressed && { opacity: 0.92 }]}>
-          {thumb ? (
-            <Image source={{ uri: thumb }} style={styles.listThumb} />
-          ) : (
-            <View style={styles.listIconBox}>
-              <FontAwesome name={fileIcon(ext)} size={22} color={TacticalPalette.boneMuted} />
-            </View>
-          )}
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={styles.listName} numberOfLines={2}>
-              {item.name}
-            </Text>
-            <Text style={styles.listMeta}>
-              {formatBytes(item.size)}
-              {item.lastModified ? ` · ${item.lastModified.toLocaleString()}` : ""}
-            </Text>
-          </View>
-          <Pressable onPress={() => openActionMenu(item)} hitSlop={12} style={styles.dotBtn}>
-            <FontAwesome name="ellipsis-v" size={18} color={TacticalPalette.boneMuted} />
-          </Pressable>
-        </Pressable>
+        <Card mode="elevated" style={styles.listCard}>
+          <List.Item
+            title={item.name}
+            description={desc}
+            titleNumberOfLines={2}
+            descriptionNumberOfLines={2}
+            onPress={() => void openOrShare(item)}
+            left={() =>
+              thumb ? (
+                <Image source={{ uri: thumb }} style={styles.listThumb} />
+              ) : (
+                <List.Icon icon={mciForExt(ext)} />
+              )
+            }
+            right={() => <IconButton icon="dots-vertical" onPress={() => openActionMenu(item)} />}
+          />
+        </Card>
       );
     },
     [loadThumb, thumbUrlByKey, openOrShare, openActionMenu],
@@ -251,23 +257,26 @@ export function S3MinioDrive() {
       const ext = extOf(item.name);
       const thumb = thumbUrlByKey[item.key];
       return (
-        <Pressable
-          onPress={() => void openOrShare(item)}
-          style={({ pressed }) => [styles.gridTile, pressed && { opacity: 0.92 }]}>
-          {thumb ? (
-            <Image source={{ uri: thumb }} style={styles.gridImage} />
-          ) : (
-            <View style={styles.gridIconArea}>
-              <FontAwesome name={fileIcon(ext)} size={36} color={TacticalPalette.boneMuted} />
-            </View>
-          )}
-          <Text style={styles.gridLabel} numberOfLines={2}>
-            {item.name}
-          </Text>
-          <Pressable style={styles.gridDots} onPress={() => openActionMenu(item)} hitSlop={8}>
-            <FontAwesome name="ellipsis-v" size={14} color={TacticalPalette.boneMuted} />
-          </Pressable>
-        </Pressable>
+        <Card mode="elevated" style={styles.gridCard} onPress={() => void openOrShare(item)}>
+          <View style={styles.gridInner}>
+            {thumb ? (
+              <Image source={{ uri: thumb }} style={styles.gridImage} />
+            ) : (
+              <View style={styles.gridIconArea}>
+                <FontAwesome name={fileIcon(ext)} size={36} color={TacticalPalette.boneMuted} />
+              </View>
+            )}
+            <Text style={styles.gridLabel} numberOfLines={2}>
+              {item.name}
+            </Text>
+            <IconButton
+              style={styles.gridDots}
+              size={20}
+              icon="dots-vertical"
+              onPress={() => openActionMenu(item)}
+            />
+          </View>
+        </Card>
       );
     },
     [loadThumb, thumbUrlByKey, openOrShare, openActionMenu],
@@ -285,34 +294,38 @@ export function S3MinioDrive() {
     <View style={styles.root}>
       <View style={styles.header}>
         <Text style={styles.title}>My Vault</Text>
-        <View style={styles.searchRow}>
-          <FontAwesome name="search" size={14} color={TacticalPalette.boneMuted} style={{ marginRight: 8 }} />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search files…"
-            placeholderTextColor={TacticalPalette.boneMuted}
-            style={styles.searchInput}
-          />
-        </View>
+        <Searchbar
+          placeholder="Search files…"
+          value={search}
+          onChangeText={setSearch}
+          style={styles.searchbar}
+          inputStyle={styles.searchInput}
+          iconColor={TacticalPalette.boneMuted}
+          placeholderTextColor={TacticalPalette.boneMuted}
+          elevation={0}
+        />
         <View style={styles.headerActions}>
-          <Pressable onPress={() => void refetch()} style={styles.iconBtn}>
+          <Pressable onPress={() => void refetch()} style={styles.headerPressBtn} hitSlop={6}>
             {isFetching ? (
               <ActivityIndicator size="small" color={TacticalPalette.coyote} />
             ) : (
               <FontAwesome name="refresh" size={16} color={TacticalPalette.coyote} />
             )}
           </Pressable>
-          <Pressable
+          <IconButton
+            icon="format-list-bulleted"
+            iconColor={TacticalPalette.bone}
+            containerColor={viewMode === "list" ? TacticalPalette.oliveDrab : undefined}
+            style={styles.iconBtn}
             onPress={() => void setVaultDriveViewMode("list")}
-            style={[styles.iconBtn, viewMode === "list" && styles.iconBtnOn]}>
-            <FontAwesome name="list" size={16} color={TacticalPalette.bone} />
-          </Pressable>
-          <Pressable
+          />
+          <IconButton
+            icon="view-grid-outline"
+            iconColor={TacticalPalette.bone}
+            containerColor={viewMode === "grid" ? TacticalPalette.oliveDrab : undefined}
+            style={styles.iconBtn}
             onPress={() => void setVaultDriveViewMode("grid")}
-            style={[styles.iconBtn, viewMode === "grid" && styles.iconBtnOn]}>
-            <FontAwesome name="th-large" size={16} color={TacticalPalette.bone} />
-          </Pressable>
+          />
         </View>
       </View>
 
@@ -338,37 +351,41 @@ export function S3MinioDrive() {
           columnWrapperStyle={viewMode === "grid" ? styles.gridRowWrap : undefined}
           ItemSeparatorComponent={viewMode === "list" ? () => <View style={{ height: 8 }} /> : undefined}
           ListEmptyComponent={
-            <Text style={styles.empty}>{search.trim() ? "No matches." : "No files yet. Tap + to upload."}</Text>
+            <Text style={styles.empty}>{search.trim() ? "No matches." : "No files yet. Use + to upload."}</Text>
           }
           renderItem={viewMode === "grid" ? renderGrid : renderList}
           estimatedItemSize={viewMode === "grid" ? 168 : 88}
         />
       )}
 
-      <Pressable style={styles.fab} onPress={() => fabSheetRef.current?.present()} accessibilityRole="button">
-        <FontAwesome name="plus" size={26} color={TacticalPalette.matteBlack} />
-      </Pressable>
-
-      <BottomSheetModal
-        ref={fabSheetRef}
-        snapPoints={snapFab}
-        enablePanDownToClose
-        backdropComponent={(p) => <BottomSheetBackdrop {...p} appearsOnIndex={0} disappearsOnIndex={-1} />}
-        enableDynamicSizing={false}
-        // @ts-expect-error Fabric / New Architecture guardrail (prop may be untyped by version)
-        disableFullWindowOverlay={Platform.OS === "ios"}>
-        <View style={styles.sheetInner}>
-          <Text style={styles.sheetTitle}>Upload</Text>
-          <Pressable style={styles.sheetRow} onPress={() => void pickAndUpload("doc")}>
-            <FontAwesome name="file-o" size={18} color={TacticalPalette.bone} />
-            <Text style={styles.sheetRowTx}>Upload document</Text>
-          </Pressable>
-          <Pressable style={styles.sheetRow} onPress={() => void pickAndUpload("media")}>
-            <FontAwesome name="image" size={18} color={TacticalPalette.bone} />
-            <Text style={styles.sheetRowTx}>Upload media</Text>
-          </Pressable>
-        </View>
-      </BottomSheetModal>
+      <FAB.Group
+        open={fabOpen}
+        visible
+        icon={fabOpen ? "close" : "plus"}
+        actions={[
+          {
+            icon: "file-upload-outline",
+            label: "Upload document",
+            onPress: () => void pickAndUpload("doc"),
+          },
+          {
+            icon: "image-plus-outline",
+            label: "Upload media",
+            onPress: () => void pickAndUpload("media"),
+          },
+          {
+            icon: "folder-plus-outline",
+            label: "Create folder",
+            onPress: () =>
+              Alert.alert(
+                "Not available yet",
+                "Folder creation is not wired to S3 in this build. Use prefixes in a future update.",
+              ),
+          },
+        ]}
+        onStateChange={({ open }) => setFabOpen(open)}
+        style={styles.fabGroup}
+      />
 
       <BottomSheetModal
         ref={actionSheetRef}
@@ -427,50 +444,34 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   title: { color: TacticalPalette.bone, fontWeight: "900", fontSize: 20, marginTop: 4 },
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
+  searchbar: {
+    backgroundColor: TacticalPalette.charcoal,
     borderWidth: 1,
     borderColor: TacticalPalette.border,
     borderRadius: 10,
-    paddingHorizontal: 10,
-    backgroundColor: TacticalPalette.charcoal,
   },
-  searchInput: { flex: 1, color: TacticalPalette.bone, paddingVertical: 10, fontSize: 15 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
-  iconBtn: {
+  searchInput: { minHeight: 0, color: TacticalPalette.bone, fontSize: 15 },
+  headerActions: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 },
+  iconBtn: { margin: 0 },
+  headerPressBtn: {
     padding: 10,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: TacticalPalette.border,
     backgroundColor: TacticalPalette.charcoal,
-  },
-  iconBtnOn: { borderColor: TacticalPalette.coyote, backgroundColor: "rgba(139,90,60,0.2)" },
-  listRow: {
-    flexDirection: "row",
+    minWidth: 44,
     alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    justifyContent: "center",
+  },
+  listCard: {
     backgroundColor: TacticalPalette.panel,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: TacticalPalette.border,
   },
-  listThumb: { width: 48, height: 48, borderRadius: 8, backgroundColor: TacticalPalette.charcoal },
-  listIconBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 8,
-    backgroundColor: TacticalPalette.charcoal,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  listName: { color: TacticalPalette.bone, fontWeight: "700", fontSize: 15 },
-  listMeta: { color: TacticalPalette.boneMuted, fontSize: 12, marginTop: 4 },
-  dotBtn: { padding: 8 },
+  listThumb: { width: 48, height: 48, borderRadius: 8, backgroundColor: TacticalPalette.charcoal, marginLeft: 8, alignSelf: "center" },
   gridRowWrap: { gap: 10, paddingHorizontal: 8, marginBottom: 10 },
-  gridTile: {
+  gridCard: {
     flex: 1,
     minWidth: 0,
     backgroundColor: TacticalPalette.panel,
@@ -478,8 +479,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TacticalPalette.border,
     overflow: "hidden",
-    paddingBottom: 8,
   },
+  gridInner: { paddingBottom: 8, position: "relative" },
   gridImage: { width: "100%", height: 110, backgroundColor: TacticalPalette.charcoal },
   gridIconArea: {
     height: 110,
@@ -488,20 +489,8 @@ const styles = StyleSheet.create({
     backgroundColor: TacticalPalette.charcoal,
   },
   gridLabel: { color: TacticalPalette.bone, fontSize: 12, fontWeight: "600", paddingHorizontal: 8, marginTop: 6 },
-  gridDots: { position: "absolute", top: 6, right: 6, padding: 6, backgroundColor: "rgba(0,0,0,0.45)", borderRadius: 6 },
-  fab: {
-    position: "absolute",
-    right: 20,
-    bottom: 24,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: TacticalPalette.accent,
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 6,
-    ...(Platform.OS === "web" ? { boxShadow: "0 4px 14px rgba(0,0,0,0.35)" } : {}),
-  },
+  gridDots: { position: "absolute", top: 2, right: 2, margin: 0, backgroundColor: "rgba(0,0,0,0.45)" },
+  fabGroup: { position: "absolute", right: 0, bottom: 0 },
   sheetInner: { paddingHorizontal: 20, paddingBottom: 24, gap: 4 },
   sheetTitle: { color: TacticalPalette.bone, fontWeight: "900", fontSize: 16, marginBottom: 8 },
   sheetRow: {

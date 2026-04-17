@@ -6,6 +6,7 @@ import { Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text,
 
 import { TacticalClockBadge } from "@/components/chrome/TacticalClockBadge";
 import { LiveCommsPanel } from "@/components/comms/LiveCommsPanel";
+import { LiveSocketProvider } from "@/components/comms/LiveSocketProvider";
 import { MMTabBar } from "@/components/navigation/MMTabBar";
 import { OpsScreeningGate } from "@/components/ops/OpsScreeningGate";
 import { ScorchedEarthListener } from "@/components/ScorchedEarthListener";
@@ -363,6 +364,7 @@ export default function AppLayout() {
         </>
       ) : null}
     </View>
+    </LiveSocketProvider>
   );
 }
 

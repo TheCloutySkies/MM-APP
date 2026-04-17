@@ -5,16 +5,13 @@ import {
   Alert,
   FlatList,
   Platform,
-  Pressable,
   Share,
   StyleSheet,
-  Text,
-  TextInput,
   View,
-  useColorScheme,
 } from "react-native";
+import { Button, Card, Text, TextInput } from "react-native-paper";
 
-import Colors from "@/constants/Colors";
+import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8 } from "@/lib/crypto/aesGcm";
 import { hexToBytes } from "@/lib/crypto/bytes";
@@ -36,8 +33,7 @@ type ExportRow = {
 };
 
 export default function MapExportsScreen() {
-  const scheme = useColorScheme() ?? "light";
-  const p = Colors[scheme];
+  const chrome = useTacticalChrome();
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
@@ -169,63 +165,76 @@ export default function MapExportsScreen() {
     else void refresh();
   };
 
-  const inputStyle = [
-    styles.input,
-    {
-      color: p.text,
-      borderColor: scheme === "dark" ? "#3f3f46" : "#d4d4d8",
-      backgroundColor: scheme === "dark" ? "#09090b" : "#fafafa",
+  const inputTheme = {
+    colors: {
+      onSurfaceVariant: chrome.textMuted,
+      background: chrome.surface,
     },
-  ];
+  };
 
   return (
-    <View style={[styles.wrap, { backgroundColor: p.background }]}>
-      <Text style={[styles.lede, { color: p.tabIconDefault }]}>
-        Plaintext GPX snapshots for Gaia GPS, Garmin BaseCamp, QGIS, or mesh tools. Only features you can decrypt with
-        the unit map key are included. Published rows are readable by every signed-in teammate.
+    <View style={[styles.wrap, { backgroundColor: chrome.background }]}>
+      <Text variant="bodySmall" style={[styles.lede, { color: chrome.textMuted }]}>
+        Plaintext GPX snapshots for Gaia GPS, Garmin BaseCamp, QGIS, or mesh tools. Only features you can decrypt with the unit map key
+        are included. Published rows are readable by every signed-in teammate.
       </Text>
-      <Text style={[styles.label, { color: p.tabIconDefault }]}>Snapshot title (optional)</Text>
+      <Text variant="labelLarge" style={[styles.label, { color: chrome.textMuted }]}>
+        Snapshot title (optional)
+      </Text>
       <TextInput
+        mode="outlined"
         placeholder="e.g. AO North — week 12"
-        placeholderTextColor="#888"
         value={title}
         onChangeText={setTitle}
-        style={inputStyle}
+        dense
+        style={styles.input}
+        outlineColor={TacticalPalette.border}
+        activeOutlineColor={chrome.accent}
+        textColor={chrome.text}
+        placeholderTextColor={chrome.textMuted}
+        theme={inputTheme}
       />
-      <Pressable
-        style={[styles.primary, { backgroundColor: p.tint, opacity: busy ? 0.65 : 1 }]}
+      <Button
+        mode="contained"
         disabled={busy}
-        onPress={() => void publishFromMap()}>
-        <Text style={[styles.primaryTx, { color: scheme === "dark" ? "#0f172a" : "#fff" }]}>
-          {busy ? "Working…" : "Publish GPX from current map"}
-        </Text>
-      </Pressable>
+        loading={busy}
+        onPress={() => void publishFromMap()}
+        buttonColor={chrome.accent}
+        textColor={TacticalPalette.matteBlack}>
+        Publish GPX from current map
+      </Button>
 
       <FlatList
         data={rows}
         keyExtractor={(r) => r.id}
         style={{ marginTop: 20 }}
-        ListHeaderComponent={<Text style={[styles.listHead, { color: p.tabIconDefault }]}>Team library</Text>}
+        ListHeaderComponent={
+          <Text variant="labelLarge" style={[styles.listHead, { color: chrome.textMuted }]}>
+            Team library
+          </Text>
+        }
         renderItem={({ item }) => (
-          <View style={[styles.card, { borderColor: TacticalPalette.border }]}>
-            <Text style={[styles.cardTitle, { color: p.text }]}>{item.title}</Text>
-            <Text style={[styles.cardMeta, { color: p.tabIconDefault }]}>
-              {item.author_username} · {item.created_at}
-            </Text>
-            <Text style={[styles.cardMeta, { color: p.tabIconDefault }]}>
-              Points {item.point_count} · routes {item.route_count} · zones {item.zone_count}
-            </Text>
-            <View style={styles.row}>
-              <Pressable style={[styles.smallBtn, { borderColor: p.tint }]} onPress={() => void shareGpx(item)}>
-                <Text style={[styles.smallBtnTx, { color: p.tint }]}>Download / share .gpx</Text>
-              </Pressable>
-              {item.author_id === profileId ? (
-                <Pressable style={[styles.smallBtn, { borderColor: TacticalPalette.danger }]} onPress={() => removeRow(item)}>
-                  <Text style={[styles.smallBtnTx, { color: TacticalPalette.danger }]}>Delete</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          </View>
+          <Card mode="outlined" style={[styles.card, { borderColor: TacticalPalette.border }]}>
+            <Card.Title title={item.title} titleStyle={{ color: chrome.text }} />
+            <Card.Content>
+              <Text variant="bodySmall" style={{ color: chrome.textMuted }}>
+                {item.author_username} · {item.created_at}
+              </Text>
+              <Text variant="bodySmall" style={{ color: chrome.textMuted, marginTop: 4 }}>
+                Points {item.point_count} · routes {item.route_count} · zones {item.zone_count}
+              </Text>
+              <View style={styles.row}>
+                <Button mode="outlined" onPress={() => void shareGpx(item)} textColor={chrome.accent}>
+                  Download / share .gpx
+                </Button>
+                {item.author_id === profileId ? (
+                  <Button mode="text" textColor={TacticalPalette.danger} onPress={() => void removeRow(item)}>
+                    Delete
+                  </Button>
+                ) : null}
+              </View>
+            </Card.Content>
+          </Card>
         )}
       />
     </View>
@@ -234,16 +243,10 @@ export default function MapExportsScreen() {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, padding: 16 },
-  lede: { fontSize: 12, lineHeight: 18, marginBottom: 12 },
-  label: { fontSize: 11, fontWeight: "700", marginBottom: 6 },
-  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15, marginBottom: 10 },
-  primary: { paddingVertical: 14, borderRadius: 12, alignItems: "center" },
-  primaryTx: { fontSize: 16, fontWeight: "800" },
-  listHead: { fontSize: 11, fontWeight: "800", letterSpacing: 0.6, marginBottom: 8 },
-  card: { borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 10 },
-  cardTitle: { fontSize: 16, fontWeight: "700" },
-  cardMeta: { fontSize: 12, marginTop: 4 },
-  row: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
-  smallBtn: { borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 },
-  smallBtnTx: { fontWeight: "700", fontSize: 13 },
+  lede: { lineHeight: 18, marginBottom: 12 },
+  label: { marginBottom: 8 },
+  input: { marginBottom: 10, backgroundColor: "transparent" },
+  listHead: { letterSpacing: 0.6, marginBottom: 8 },
+  card: { marginBottom: 10, borderRadius: 10 },
+  row: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" },
 });

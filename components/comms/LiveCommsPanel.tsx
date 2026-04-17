@@ -1,9 +1,14 @@
+/**
+ * Live comms: native uses react-native-gifted-chat (keyboard + bubble UX).
+ * Web keeps the FlashList + composer path — Gifted Chat on RN Web is gated off
+ * due to uneven support (see plan Phase A).
+ */
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useQuery } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ComponentProps } from "react";
 import {
   Image,
   KeyboardAvoidingView,
@@ -18,11 +23,14 @@ import {
   View,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
+import { Actions, Bubble, GiftedChat, MessageText } from "react-native-gifted-chat";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { TacticalPalette } from "@/constants/TacticalTheme";
-import { useLiveSocket, type LiveChatEnvelope } from "@/hooks/useLiveSocket";
+import { liveMessagesToGiftedMessages, type MmGiftedMessage } from "@/lib/comms/giftedAdapters";
+import { useLiveSocketContext } from "@/components/comms/LiveSocketProvider";
+import type { LiveChatEnvelope } from "@/hooks/useLiveSocket";
 import { getVaultPresignedGetUrl, isVaultS3StorageConfigured, putVaultObject } from "@/lib/storage";
 import { useMMStore } from "@/store/mmStore";
 
@@ -71,7 +79,8 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
     deliveryByMessageId,
     sendText,
     sendPayload,
-  } = useLiveSocket();
+    presenceRoster,
+  } = useLiveSocketContext();
 
   const [draft, setDraft] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -91,6 +100,35 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
     enabled: Boolean(supabase && profileId),
     staleTime: 5 * 60_000,
   });
+
+  const peerReadId = dmPeer ? readReceipts[dmPeer.id] : undefined;
+
+  const othersOnline = useMemo(
+    () =>
+      presenceRoster
+        .filter((u) => u.user_id && u.user_id !== profileId)
+        .sort((a, b) => a.display_name.localeCompare(b.display_name)),
+    [presenceRoster, profileId],
+  );
+
+  const onlineContactIds = useMemo(
+    () => new Set(presenceRoster.map((u) => u.user_id).filter(Boolean)),
+    [presenceRoster],
+  );
+
+  const giftedMessages = useMemo(
+    () =>
+      liveMessagesToGiftedMessages(
+        messages,
+        profileId,
+        username,
+        channelTab,
+        dmPeer,
+        readReceipts,
+        deliveryByMessageId,
+      ),
+    [messages, profileId, username, channelTab, dmPeer, readReceipts, deliveryByMessageId],
+  );
 
   const onSend = useCallback(() => {
     const t = draft.trim();
@@ -186,14 +224,88 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
     });
   }, [sendPayload, setError]);
 
-  const peerReadId = dmPeer ? readReceipts[dmPeer.id] : undefined;
-
   const headerTitle =
-    channelTab === "group"
-      ? "Group chat"
-      : dmPeer
-        ? `DM · ${dmPeer.displayName}`
-        : "Private";
+    channelTab === "group" ? "Group chat" : dmPeer ? `DM · ${dmPeer.displayName}` : "Private";
+
+  const attachmentActions = useMemo(
+    () => [
+      { title: "Upload document", action: () => void onPickDoc() },
+      { title: "Upload photo", action: () => void onPickImage() },
+      { title: "Share location", action: () => void onShareLocation() },
+      { title: "Cancel", action: () => {} },
+    ],
+    [onPickDoc, onPickImage, onShareLocation],
+  );
+
+  const renderGiftedTicks = useCallback(
+    (m: MmGiftedMessage) => {
+      if (m.user._id !== profileId) return null;
+      const id = String(m._id);
+      if (id.startsWith("local-")) return <Text style={styles.receipt}>…</Text>;
+      const readByPeer = channelTab === "private" && dmPeer ? peerHasRead(peerReadId, id) : false;
+      const delivered = deliveryByMessageId[id] === "delivered";
+      const double = readByPeer || delivered;
+      const receiptTxt = double ? "✓✓" : "✓";
+      return (
+        <Text style={[styles.receipt, readByPeer && double && styles.receiptRead]}>{receiptTxt}</Text>
+      );
+    },
+    [profileId, channelTab, dmPeer, peerReadId, deliveryByMessageId],
+  );
+
+  const renderGiftedCustomView = useCallback(
+    (bubbleProps: ComponentProps<typeof Bubble<MmGiftedMessage>>) => {
+      const env = bubbleProps.currentMessage.mmEnvelope;
+      if (env.kind === "file" && env.attachment) {
+        return (
+          <View style={styles.gcFilePill}>
+            <FontAwesome name="file-o" size={16} color={TacticalPalette.bone} />
+            <Text style={styles.gcFileTx} numberOfLines={2}>
+              {env.attachment.filename || env.text || "File"}
+            </Text>
+          </View>
+        );
+      }
+      if (env.kind === "location" && env.location) {
+        return (
+          <Pressable
+            onPress={() =>
+              void Linking.openURL(
+                `https://www.google.com/maps/search/?api=1&query=${env.location!.lat},${env.location!.lng}`,
+              )
+            }>
+            {Platform.OS === "web" ? (
+              <Image source={{ uri: staticMapUri(env.location.lat, env.location.lng) }} style={styles.gcMapPrev} />
+            ) : (
+              <MapView
+                style={styles.gcMapPrev}
+                scrollEnabled={false}
+                zoomTapEnabled={false}
+                zoomEnabled={false}
+                pitchEnabled={false}
+                rotateEnabled={false}
+                region={{
+                  latitude: env.location.lat,
+                  longitude: env.location.lng,
+                  latitudeDelta: 0.02,
+                  longitudeDelta: 0.02,
+                }}>
+                <Marker coordinate={{ latitude: env.location.lat, longitude: env.location.lng }} />
+              </MapView>
+            )}
+            <Text style={styles.gcMapLink}>Open in maps</Text>
+          </Pressable>
+        );
+      }
+      return null;
+    },
+    [],
+  );
+
+  const renderGiftedMessageText = useCallback((props: ComponentProps<typeof MessageText<MmGiftedMessage>>) => {
+    if (!props.currentMessage.text) return null;
+    return <MessageText {...props} />;
+  }, []);
 
   return (
     <View style={styles.wrap}>
@@ -235,6 +347,25 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
 
       {error ? <Text style={styles.err}>{error}</Text> : null}
 
+      {channelTab === "group" ? (
+        <View style={styles.presenceStrip}>
+          <Text style={styles.presenceLabel}>Online</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presenceScroll}>
+            {status !== "connected" ? (
+              <Text style={styles.presenceNames}>—</Text>
+            ) : othersOnline.length === 0 ? (
+              <Text style={styles.presenceNames}>No other teammates on comms</Text>
+            ) : (
+              othersOnline.map((u) => (
+                <Text key={u.user_id} style={styles.presenceNameChip}>
+                  {u.display_name}
+                </Text>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      ) : null}
+
       {channelTab === "private" && !dmPeer ? (
         <View style={styles.contactsWrap}>
           <Text style={styles.contactsHint}>Tap a teammate to start a direct message.</Text>
@@ -244,6 +375,12 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
                 key={c.id}
                 onPress={() => setDmPeer({ id: c.id, displayName: c.username })}
                 style={({ pressed }) => [styles.contactRow, pressed && { opacity: 0.9 }]}>
+                <View
+                  style={[
+                    styles.presenceDot,
+                    onlineContactIds.has(c.id) ? styles.presenceDotOn : styles.presenceDotOff,
+                  ]}
+                />
                 <FontAwesome name="user" size={18} color={TacticalPalette.coyote} style={{ marginRight: 12 }} />
                 <Text style={styles.contactName}>{c.username}</Text>
                 <FontAwesome name="chevron-right" size={14} color={TacticalPalette.boneMuted} />
@@ -254,11 +391,11 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
             ) : null}
           </ScrollView>
         </View>
-      ) : (
+      ) : Platform.OS === "web" ? (
         <KeyboardAvoidingView
           style={styles.body}
-          behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined}
-          keyboardVerticalOffset={Platform.OS === "android" ? Math.max(0, insets.top + 12) : 0}>
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={0}>
           <AnyFlashList
             data={messages}
             inverted
@@ -312,6 +449,75 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
             </Pressable>
           </View>
         </KeyboardAvoidingView>
+      ) : (
+        <View style={styles.giftedWrap}>
+          <GiftedChat<MmGiftedMessage>
+            messages={giftedMessages}
+            user={{ _id: profileId, name: username }}
+            onSend={(msgs) => {
+              const t = msgs[0]?.text?.trim();
+              if (t) void sendText(t);
+            }}
+            isUsernameVisible
+            colorScheme="dark"
+            messagesContainerStyle={{ backgroundColor: TacticalPalette.matteBlack }}
+            textInputProps={{
+              placeholder: status === "connected" ? "Message…" : "Connecting…",
+              placeholderTextColor: TacticalPalette.boneMuted,
+              editable: status === "connected",
+              style: { color: TacticalPalette.bone },
+            }}
+            timeTextStyle={{
+              left: { color: TacticalPalette.boneMuted },
+              right: { color: TacticalPalette.boneMuted },
+            }}
+            renderUsername={(u) => (
+              <Text style={styles.gcUsername} numberOfLines={1}>
+                {u?.name ?? ""}
+              </Text>
+            )}
+            renderBubble={(props) => (
+              <Bubble
+                {...props}
+                wrapperStyle={{
+                  left: {
+                    backgroundColor: TacticalPalette.panel,
+                    borderWidth: 1,
+                    borderColor: TacticalPalette.border,
+                  },
+                  right: {
+                    backgroundColor: "rgba(107,142,92,0.28)",
+                    borderWidth: 1,
+                    borderColor: TacticalPalette.coyote,
+                  },
+                }}
+              />
+            )}
+            renderActions={() => (
+              <Actions
+                actions={attachmentActions}
+                icon={() => (
+                  <View style={styles.gcActionIcon}>
+                    <FontAwesome name="paperclip" size={20} color={TacticalPalette.bone} />
+                  </View>
+                )}
+              />
+            )}
+            renderAccessory={() => (
+              <View style={styles.gcAccessory}>
+                <Pressable onPress={() => setEmojiOpen(true)} style={styles.gcAccessoryBtn} accessibilityLabel="Emoji">
+                  <Text style={styles.emojiGlyph}>😊</Text>
+                </Pressable>
+              </View>
+            )}
+            renderCustomView={renderGiftedCustomView}
+            renderMessageText={renderGiftedMessageText}
+            renderTicks={renderGiftedTicks}
+            keyboardAvoidingViewProps={{
+              keyboardVerticalOffset: Platform.OS === "android" ? Math.max(0, insets.top + 12) : insets.top,
+            }}
+          />
+        </View>
       )}
 
       <Modal visible={emojiOpen} transparent animationType="fade" onRequestClose={() => setEmojiOpen(false)}>
@@ -437,6 +643,24 @@ function MessageRow({
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, minHeight: 0, backgroundColor: TacticalPalette.matteBlack },
+  giftedWrap: { flex: 1, minHeight: 0, backgroundColor: TacticalPalette.matteBlack },
+  presenceStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: TacticalPalette.border,
+    gap: 8,
+    maxHeight: 40,
+  },
+  presenceLabel: { color: TacticalPalette.boneMuted, fontWeight: "800", fontSize: 11 },
+  presenceScroll: { flexDirection: "row", alignItems: "center", flexGrow: 1 },
+  presenceNames: { color: TacticalPalette.boneMuted, fontSize: 12 },
+  presenceNameChip: { color: TacticalPalette.coyote, fontSize: 12, fontWeight: "700", marginRight: 14 },
+  presenceDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  presenceDotOn: { backgroundColor: TacticalPalette.success },
+  presenceDotOff: { backgroundColor: TacticalPalette.boneMuted, opacity: 0.35 },
   header: {
     paddingTop: 8,
     paddingHorizontal: 12,
@@ -551,6 +775,41 @@ const styles = StyleSheet.create({
   fileTx: { color: TacticalPalette.bone, fontSize: 14, fontWeight: "600", flex: 1 },
   mapPrev: { width: 260, height: 120, borderRadius: 12, marginTop: 4, backgroundColor: TacticalPalette.charcoal },
   mapLink: { color: TacticalPalette.coyote, fontWeight: "800", fontSize: 13, marginTop: 6 },
+  gcFilePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.2)",
+    marginBottom: 4,
+  },
+  gcFileTx: { color: TacticalPalette.bone, fontSize: 14, fontWeight: "600", flex: 1 },
+  gcMapPrev: { width: 220, height: 120, borderRadius: 12, marginBottom: 4, backgroundColor: TacticalPalette.charcoal },
+  gcMapLink: { color: TacticalPalette.coyote, fontWeight: "800", fontSize: 13 },
+  gcUsername: { color: TacticalPalette.boneMuted, fontSize: 11, fontWeight: "700", marginBottom: 2 },
+  gcActionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: TacticalPalette.border,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: TacticalPalette.charcoal,
+  },
+  gcAccessory: { paddingHorizontal: 8, paddingBottom: 4, flexDirection: "row", gap: 8 },
+  gcAccessoryBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: TacticalPalette.border,
+    backgroundColor: TacticalPalette.charcoal,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   emojiScrim: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.55)",

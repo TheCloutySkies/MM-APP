@@ -1,5 +1,5 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Link } from "expo-router";
+import { Link, useRouter } from "expo-router";
 import { useWindowDimensions } from "react-native";
 
 import { PanicButton } from "@/components/PanicButton";
@@ -10,6 +10,7 @@ import { useMMStore } from "@/store/mmStore";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export default function HomeScreen() {
+  const router = useRouter();
   const chrome = useTacticalChrome();
   const username = useMMStore((s) => s.username);
   const tabBarOrder = useMMStore((s) => s.tabBarOrder);
@@ -41,9 +42,14 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <Text style={[styles.kicker, { color: chrome.tint }]}>MM</Text>
         <Text style={[styles.h1, { color: chrome.text }]}>Operations hub</Text>
-        <Text style={[styles.sub, { color: chrome.textMuted }]}>
-          {username ? `Signed in as ${username}` : "Secure session"} — choose a module.
-        </Text>
+        <View style={styles.signedInRow}>
+          <Text style={[styles.sub, { color: chrome.textMuted, flex: 1 }]}>
+            {username ? `Signed in as ${username}` : "Secure session"} — choose a module.
+          </Text>
+          <Pressable onPress={() => router.push("/(app)/profile")} hitSlop={8} accessibilityRole="button" accessibilityLabel="Profile and presence">
+            <Text style={{ color: chrome.accent, fontWeight: "800", fontSize: 14 }}>Profile</Text>
+          </Pressable>
+        </View>
         <Text style={[styles.hubHint, { color: chrome.tabIconDefault }]}>
           Web: drag a highlighted module onto the tab rail to reorder it (drop on a tab or empty rail). Long-press the same
           cards on mobile to pin that tab to the top of the rail.
@@ -201,9 +207,14 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: "700",
   },
+  signedInRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    marginTop: 8,
+  },
   sub: {
     fontSize: 14,
-    marginTop: 8,
     lineHeight: 20,
   },
   hubHint: {

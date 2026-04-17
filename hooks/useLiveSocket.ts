@@ -48,6 +48,12 @@ export type SendPayload = {
 
 export type DmPeer = { id: string; displayName: string };
 
+/** Teammate currently connected to the chat server (Socket.IO presence). */
+export type PresenceUser = {
+  user_id: string;
+  display_name: string;
+};
+
 export function dmChannelId(uid1: string, uid2: string): string {
   const [a, b] = [uid1, uid2].sort();
   return `dm:${a}:${b}`;
@@ -77,6 +83,7 @@ export function useLiveSocket() {
   const [readReceipts, setReadReceipts] = useState<Record<string, string>>({});
   /** message_id -> 'sent' | 'delivered' for own messages */
   const [deliveryByMessageId, setDeliveryByMessageId] = useState<Record<string, "sent" | "delivered">>({});
+  const [presenceRoster, setPresenceRoster] = useState<PresenceUser[]>([]);
 
   const socketRef = useRef<Socket | null>(null);
   const activeChannelRef = useRef<string>(GROUP_CHANNEL_ID);
@@ -115,7 +122,10 @@ export function useLiveSocket() {
     socketRef.current = socket;
 
     socket.on("connect", () => setStatus("connected"));
-    socket.on("disconnect", () => setStatus("disconnected"));
+    socket.on("disconnect", () => {
+      setStatus("disconnected");
+      setPresenceRoster([]);
+    });
     socket.on("connect_error", (e) => {
       setStatus("error");
       setError(e?.message ?? "Socket connection failed");
@@ -155,6 +165,16 @@ export function useLiveSocket() {
         setReadReceipts((prev) => ({ ...prev, [uid]: mid }));
       },
     );
+
+    socket.on("presence_roster", (p: { users?: PresenceUser[] }) => {
+      const users = Array.isArray(p?.users) ? p.users : [];
+      setPresenceRoster(
+        users.map((u) => ({
+          user_id: String(u.user_id ?? ""),
+          display_name: String(u.display_name ?? u.user_id ?? ""),
+        })),
+      );
+    });
 
     return () => {
       try {
@@ -300,6 +320,7 @@ export function useLiveSocket() {
     messages,
     readReceipts,
     deliveryByMessageId,
+    presenceRoster,
     sendText,
     sendPayload,
     markRead,

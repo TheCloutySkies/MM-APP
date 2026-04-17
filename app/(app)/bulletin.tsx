@@ -1,20 +1,17 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
-    Alert,
-    FlatList,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
-    useColorScheme,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  View,
 } from "react-native";
+import { Banner, Button, Card, Text, TextInput } from "react-native-paper";
 
 import { DocumentDetailModal } from "@/components/common/DocumentDetailModal";
-import Colors from "@/constants/Colors";
+import { useTacticalChrome } from "@/hooks/useTacticalChrome";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aesGcm";
 import { hexToBytes } from "@/lib/crypto/bytes";
@@ -31,8 +28,7 @@ type Row = {
 };
 
 export default function BulletinScreen() {
-  const scheme = useColorScheme() ?? "light";
-  const p = Colors[scheme];
+  const chrome = useTacticalChrome();
   const supabase = useMMStore((s) => s.supabase);
   const profileId = useMMStore((s) => s.profileId);
   const username = useMMStore((s) => s.username);
@@ -51,6 +47,7 @@ export default function BulletinScreen() {
   const [rows, setRows] = useState<Row[]>([]);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [keyBannerVisible, setKeyBannerVisible] = useState(true);
   const [detail, setDetail] = useState<{
     title: string;
     body: string;
@@ -125,61 +122,87 @@ export default function BulletinScreen() {
     }
   };
 
-  const inputStyle = [
-    styles.input,
-    {
-      color: p.text,
-      borderColor: scheme === "dark" ? "#3f3f46" : "#d4d4d8",
-      backgroundColor: scheme === "dark" ? "#09090b" : "#fafafa",
-    },
-  ];
-
   const hasBundledTeamKey = !!getMapSharedKeyHex();
+  const keyReady = mapKey && mapKey.length === 32;
+
+  const inputTheme = {
+    colors: {
+      onSurfaceVariant: chrome.textMuted,
+      background: chrome.surface,
+    },
+  };
 
   return (
     <KeyboardAvoidingView
-      style={[styles.wrap, { backgroundColor: p.background }]}
+      style={[styles.wrap, { backgroundColor: chrome.background }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}>
-      <Text style={[styles.lede, { color: p.tabIconDefault }]}>
+      <Text variant="bodySmall" style={[styles.lede, { color: chrome.textMuted }]}>
         Team bulletin — ciphertext only on the server. Everyone uses the same team key as map markers and mission plans
         (bundled in the app from wrangler). Unlock your vault only if you are not using the shared key.
       </Text>
-      {!mapKey || mapKey.length !== 32 ? (
-        <View
-          style={[
-            styles.warnBanner,
-            { borderColor: TacticalPalette.accent, backgroundColor: "rgba(139, 90, 60, 0.2)" },
-          ]}>
-          <Text style={[styles.warnText, { color: p.text }]}>
-            {hasBundledTeamKey
-              ? "Cannot decrypt posts yet. Fully restart the app (force-quit) so the team key loads, or unlock your main vault."
-              : "This build has no EXPO_PUBLIC_MM_MAP_SHARED_KEY. Rebuild from the latest repo or set the key in .env / wrangler.toml."}
-          </Text>
-        </View>
+
+      {!keyReady ? (
+        <Banner
+          visible={keyBannerVisible}
+          icon="shield-key-outline"
+          actions={[{ label: "Dismiss", onPress: () => setKeyBannerVisible(false) }]}
+          style={styles.banner}>
+          {hasBundledTeamKey
+            ? "Cannot decrypt posts yet. Fully restart the app (force-quit) so the team key loads, or unlock your main vault."
+            : "This build has no EXPO_PUBLIC_MM_MAP_SHARED_KEY. Rebuild from the latest repo or set the key in .env / wrangler.toml."}
+        </Banner>
       ) : null}
-      <Text style={[styles.label, { color: p.tabIconDefault }]}>New post</Text>
-      <TextInput placeholder="Title" placeholderTextColor="#888" value={title} onChangeText={setTitle} style={inputStyle} />
+
+      <Text variant="labelLarge" style={[styles.label, { color: chrome.textMuted }]}>
+        New post
+      </Text>
       <TextInput
-        placeholder="Body"
-        placeholderTextColor="#888"
+        mode="outlined"
+        label="Title"
+        value={title}
+        onChangeText={setTitle}
+        dense
+        style={styles.input}
+        outlineColor={TacticalPalette.border}
+        activeOutlineColor={chrome.accent}
+        textColor={chrome.text}
+        placeholderTextColor={chrome.textMuted}
+        theme={inputTheme}
+      />
+      <TextInput
+        mode="outlined"
+        label="Body"
         value={body}
         onChangeText={setBody}
-        style={[inputStyle, styles.bodyBox]}
         multiline
+        numberOfLines={4}
+        dense
+        style={[styles.input, styles.bodyBox]}
+        outlineColor={TacticalPalette.border}
+        activeOutlineColor={chrome.accent}
+        textColor={chrome.text}
+        placeholderTextColor={chrome.textMuted}
+        theme={inputTheme}
       />
-      <Pressable
-        style={[styles.postBtn, { backgroundColor: p.tint }]}
-        onPress={() => {
-          void post();
-        }}>
-        <Text style={[styles.postBtnTx, { color: scheme === "dark" ? "#0f172a" : "#fff" }]}>Post (encrypted)</Text>
-      </Pressable>
+      <Button
+        mode="contained"
+        onPress={() => void post()}
+        disabled={!keyReady}
+        buttonColor={chrome.accent}
+        textColor={TacticalPalette.matteBlack}
+        style={styles.postBtn}>
+        Post (encrypted)
+      </Button>
 
       <FlatList
         data={rows}
         keyExtractor={(r) => r.id}
         style={{ marginTop: 16 }}
-        ListHeaderComponent={<Text style={[styles.listHead, { color: p.tabIconDefault }]}>Feed</Text>}
+        ListHeaderComponent={
+          <Text variant="labelLarge" style={[styles.listHead, { color: chrome.textMuted }]}>
+            Feed
+          </Text>
+        }
         renderItem={({ item }) => {
           let headline = "…";
           let preview = "";
@@ -194,32 +217,28 @@ export default function BulletinScreen() {
             }
           }
           return (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Open bulletin: ${headline}`}
+            <Card
+              mode="outlined"
               style={[styles.card, { borderColor: TacticalPalette.border }]}
               onPress={() => openRow(item)}>
-              <View style={styles.cardTop}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.cardTitle, { color: p.text }]} numberOfLines={2}>
-                    {headline}
-                  </Text>
-                  {preview ? (
-                    <Text style={[styles.cardPreview, { color: p.tabIconDefault }]} numberOfLines={2}>
-                      {preview}
-                      {preview.length >= 120 ? "…" : ""}
-                    </Text>
-                  ) : null}
-                  <Text style={[styles.cardMeta, { color: p.tabIconDefault }]}>
-                    {item.author_username} · {item.created_at}
-                  </Text>
-                </View>
-                <Text style={[styles.chevron, { color: p.tint }]}>›</Text>
-              </View>
-            </Pressable>
+              <Card.Title
+                title={headline}
+                titleNumberOfLines={2}
+                titleStyle={{ color: chrome.text, fontSize: 16 }}
+                subtitle={
+                  preview
+                    ? `${preview}${preview.length >= 120 ? "…" : ""}\n${item.author_username} · ${item.created_at}`
+                    : `${item.author_username} · ${item.created_at}`
+                }
+                subtitleNumberOfLines={4}
+                subtitleStyle={{ color: chrome.textMuted, fontSize: 13 }}
+                right={() => <Text style={{ color: chrome.accent, fontSize: 22, marginRight: 8 }}>›</Text>}
+              />
+            </Card>
           );
         }}
       />
+
       <DocumentDetailModal
         visible={detail != null}
         title={detail?.title ?? ""}
@@ -257,19 +276,12 @@ export default function BulletinScreen() {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, padding: 16 },
-  lede: { fontSize: 12, lineHeight: 17, marginBottom: 14 },
-  label: { fontSize: 11, fontWeight: "700", marginBottom: 6 },
-  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15, marginBottom: 8 },
-  bodyBox: { minHeight: 96, textAlignVertical: "top" },
-  postBtn: { paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 4 },
-  postBtnTx: { fontSize: 16, fontWeight: "800" },
-  listHead: { fontSize: 11, fontWeight: "800", letterSpacing: 0.6, marginBottom: 8 },
-  card: { borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 8 },
-  cardTop: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  cardTitle: { fontSize: 16, fontWeight: "700" },
-  cardPreview: { fontSize: 13, marginTop: 6, lineHeight: 18 },
-  cardMeta: { fontSize: 12, marginTop: 6 },
-  chevron: { fontSize: 28, fontWeight: "300", marginTop: -4 },
-  warnBanner: { borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 14 },
-  warnText: { fontSize: 13, lineHeight: 19, fontWeight: "600" },
+  lede: { lineHeight: 17, marginBottom: 14 },
+  banner: { marginBottom: 12 },
+  label: { marginBottom: 8 },
+  input: { marginBottom: 8, backgroundColor: "transparent" },
+  bodyBox: { minHeight: 120 },
+  postBtn: { marginTop: 4, borderRadius: 10 },
+  listHead: { letterSpacing: 0.6, marginBottom: 8 },
+  card: { marginBottom: 8, borderRadius: 10 },
 });

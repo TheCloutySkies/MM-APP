@@ -18,7 +18,10 @@ import { registerMmServiceWorker } from "@/lib/offline/registerServiceWorker";
 import { flushPendingSyncStub } from "@/lib/offline/syncQueue";
 import { useMMStore } from "@/store/mmStore";
 import { Platform } from "react-native";
+import { PaperProvider } from "react-native-paper";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+
+import { tacticalPaperTheme } from "@/lib/theme/paperTacticalTheme";
 
 export { ErrorBoundary } from "expo-router";
 
@@ -89,20 +92,22 @@ function RootLayoutNav() {
     <QueryClientProvider client={queryClient}>
       <BottomSheetModalProvider>
         <SafeAreaProvider>
-          <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-            <LayoutProvider>
-              <PwaShellReadyBanner />
-              <LayoutWelcomeGate />
-              <Stack
-                screenOptions={{
-                  contentStyle: { flex: 1, backgroundColor: chrome.background },
-                }}>
-                <Stack.Screen name="index" options={{ headerShown: false }} />
-                <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-                <Stack.Screen name="(app)" options={{ headerShown: false }} />
-              </Stack>
-            </LayoutProvider>
-          </ThemeProvider>
+          <PaperProvider theme={tacticalPaperTheme}>
+            <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+              <LayoutProvider>
+                <PwaShellReadyBanner />
+                <LayoutWelcomeGate />
+                <Stack
+                  screenOptions={{
+                    contentStyle: { flex: 1, backgroundColor: chrome.background },
+                  }}>
+                  <Stack.Screen name="index" options={{ headerShown: false }} />
+                  <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                  <Stack.Screen name="(app)" options={{ headerShown: false }} />
+                </Stack>
+              </LayoutProvider>
+            </ThemeProvider>
+          </PaperProvider>
         </SafeAreaProvider>
       </BottomSheetModalProvider>
     </QueryClientProvider>

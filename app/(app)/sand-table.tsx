@@ -1,12 +1,13 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from "react-native";
+import { Alert, ScrollView, StyleSheet, useColorScheme, View } from "react-native";
+import { Button, Card, Text } from "react-native-paper";
 
 import { TacticalBlock } from "@/components/shell/TacticalBlock";
 import { TacticalSandTableModal } from "@/components/sand-table/TacticalSandTableModal";
-import Colors from "@/constants/Colors";
-import { TacticalPalette } from "@/constants/TacticalTheme";
+import { useTacticalChrome } from "@/hooks/useTacticalChrome";
+import { TacticalPalette, type TacticalColors } from "@/constants/TacticalTheme";
 import { resolveMapEncryptKey, useMMStore, type VaultMode } from "@/store/mmStore";
 import { hexToBytes } from "@/lib/crypto/bytes";
 import { getMapSharedKeyHex } from "@/lib/env";
@@ -17,8 +18,8 @@ import { getMapSharedKeyHex } from "@/lib/env";
  */
 export default function SandTableScreen() {
   const router = useRouter();
+  const chrome = useTacticalChrome();
   const scheme = useColorScheme() ?? "light";
-  const p = Colors[scheme];
   const sch = scheme === "dark" ? "dark" : "light";
   const vaultMode = useMMStore((s) => s.vaultMode) as VaultMode | null;
   const mapKey = useMemo(() => {
@@ -33,51 +34,47 @@ export default function SandTableScreen() {
   const [sandOpen, setSandOpen] = useState(false);
 
   return (
-    <View style={[styles.wrap, { backgroundColor: p.background }]}>
+    <View style={[styles.wrap, { backgroundColor: chrome.background }]}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
-          <FontAwesome name="chevron-left" size={16} color={p.tint} />
-          <Text style={[styles.backTx, { color: p.tint }]}>Back</Text>
-        </Pressable>
+        <Button mode="text" onPress={() => router.back()} icon="chevron-left" textColor={chrome.accent} style={styles.back}>
+          Back
+        </Button>
 
-        <Text style={[styles.kicker, { color: p.tabIconDefault }]}>SAND TABLE ROUTE CREATOR</Text>
-        <Text style={[styles.h1, { color: p.text }]}>Tactical sketch planner</Text>
-        <Text style={[styles.lede, { color: p.tabIconDefault }]}>
-          The Sand Table is a fullscreen, isolated Leaflet workspace (web) — it never shares layers with the global Map tab.
-          Draw routes, zones, MIL-STD symbols, and labels; export encrypted GeoJSON + PNG into a Route recon report.
+        <Text variant="labelLarge" style={[styles.kicker, { color: chrome.textMuted }]}>
+          SAND TABLE ROUTE CREATOR
+        </Text>
+        <Text variant="headlineSmall" style={[styles.h1, { color: chrome.text }]}>
+          Tactical sketch planner
+        </Text>
+        <Text variant="bodyMedium" style={[styles.lede, { color: chrome.textMuted }]}>
+          The Sand Table is a fullscreen, isolated Leaflet workspace (web) — it never shares layers with the global Map tab. Draw
+          routes, zones, MIL-STD symbols, and labels; export encrypted GeoJSON + PNG into a Route recon report.
         </Text>
 
-        <Pressable
+        <Card
+          mode="elevated"
+          style={[styles.ctaCard, { borderColor: TacticalPalette.accent }]}
           onPress={() => {
             if (!mapKey || mapKey.length !== 32) {
               Alert.alert("Sand Table", "Unlock your vault or set a team ops key before exporting plans.");
               return;
             }
             setSandOpen(true);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel="Open isolated Sand Table editor"
-          style={styles.cta}>
-          <View style={[styles.ctaInner, { borderColor: TacticalPalette.accent }]}>
-            <FontAwesome name="map" size={20} color={TacticalPalette.accent} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.ctaTitle, { color: TacticalPalette.accent }]}>Open Sand Table editor</Text>
-              <Text style={{ color: p.tabIconDefault, fontSize: 12, lineHeight: 17, marginTop: 4 }}>
-                Temporary sandbox map — approve to encrypt vectors + snapshot. On mobile, use Route recon → Sand Table to attach the
-                same export to a report.
-              </Text>
-            </View>
-            <FontAwesome name="chevron-right" size={12} color={p.tabIconDefault} />
-          </View>
-        </Pressable>
+          }}>
+          <Card.Title
+            title="Open Sand Table editor"
+            titleStyle={{ color: TacticalPalette.accent, fontSize: 16 }}
+            subtitle="Temporary sandbox map — approve to encrypt vectors + snapshot. On mobile, use Route recon → Sand Table to attach the same export to a report."
+            subtitleNumberOfLines={4}
+            subtitleStyle={{ color: chrome.textMuted, fontSize: 12, lineHeight: 17 }}
+            left={() => <FontAwesome name="map" size={20} color={TacticalPalette.accent} style={{ marginLeft: 12 }} />}
+            right={() => <FontAwesome name="chevron-right" size={12} color={chrome.textMuted} style={{ marginRight: 12 }} />}
+          />
+        </Card>
 
-        <Pressable
-          onPress={() => router.push("/(app)/map")}
-          accessibilityRole="button"
-          accessibilityLabel="Open live tactical map"
-          style={styles.secondary}>
-          <Text style={{ color: p.tint, fontWeight: "800" }}>Open live team map (global tab)</Text>
-        </Pressable>
+        <Button mode="text" onPress={() => router.push("/(app)/map")} textColor={chrome.accent} style={styles.secondary}>
+          Open live team map (global tab)
+        </Button>
 
         <TacticalSandTableModal
           visible={sandOpen}
@@ -93,23 +90,22 @@ export default function SandTableScreen() {
         />
 
         <TacticalBlock title="Architecture checkpoints" defaultOpen={false}>
-          <Bullet text="OSM / topo vector tiles cached in IndexedDB (MapLibre-class stack)" scheme={sch} />
-          <Bullet text="Leaflet Geoman toolbar — routes, zones, buffers, measurements" scheme={sch} />
-          <Bullet text="milsymbol-generated SVG markers (affiliation + unit type)" scheme={sch} />
-          <Bullet text="Map-anchored labels + Calcite-style property rail" scheme={sch} />
-          <Bullet text="Encrypted GeoJSON “operation plans” + optional Cloudflare print worker" scheme={sch} />
+          <Bullet text="OSM / topo vector tiles cached in IndexedDB (MapLibre-class stack)" chrome={chrome} />
+          <Bullet text="Leaflet Geoman toolbar — routes, zones, buffers, measurements" chrome={chrome} />
+          <Bullet text="milsymbol-generated SVG markers (affiliation + unit type)" chrome={chrome} />
+          <Bullet text="Map-anchored labels + Calcite-style property rail" chrome={chrome} />
+          <Bullet text="Encrypted GeoJSON “operation plans” + optional Cloudflare print worker" chrome={chrome} />
         </TacticalBlock>
       </ScrollView>
     </View>
   );
 }
 
-function Bullet({ text, scheme }: { text: string; scheme: "light" | "dark" }) {
-  const p = Colors[scheme];
+function Bullet({ text, chrome }: { text: string; chrome: TacticalColors }) {
   return (
     <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
       <Text style={{ color: TacticalPalette.accent, fontWeight: "900" }}>•</Text>
-      <Text style={{ flex: 1, color: p.text, fontSize: 14, lineHeight: 20 }}>{text}</Text>
+      <Text style={{ flex: 1, color: chrome.text, fontSize: 14, lineHeight: 20 }}>{text}</Text>
     </View>
   );
 }
@@ -117,25 +113,18 @@ function Bullet({ text, scheme }: { text: string; scheme: "light" | "dark" }) {
 const styles = StyleSheet.create({
   wrap: { flex: 1 },
   content: { padding: 16, paddingBottom: 40 },
-  back: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 },
-  backTx: { fontWeight: "800", fontSize: 15 },
-  kicker: { fontSize: 11, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
-  h1: { fontSize: 24, fontWeight: "900", marginBottom: 10 },
-  lede: { fontSize: 14, lineHeight: 21, marginBottom: 18 },
-  cta: { marginBottom: 18 },
-  ctaInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    padding: 14,
+  back: { alignSelf: "flex-start", marginBottom: 8 },
+  kicker: { letterSpacing: 1.1, marginBottom: 8 },
+  h1: { fontWeight: "900", marginBottom: 10 },
+  lede: { lineHeight: 21, marginBottom: 18 },
+  ctaCard: {
+    marginBottom: 18,
     borderRadius: 12,
     borderWidth: 2,
     backgroundColor: TacticalPalette.elevated,
   },
-  ctaTitle: { fontSize: 16, fontWeight: "900" },
   secondary: {
     alignSelf: "flex-start",
     marginBottom: 18,
-    paddingVertical: 10,
   },
 });

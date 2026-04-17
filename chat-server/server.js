@@ -141,6 +141,52 @@ function rowToEnvelope(row) {
   };
 }
 
+/** In-memory presence: who has an active Socket.IO connection to this server. */
+const onlineByUser = new Map();
+
+function presenceAdd(userId, displayName, socketId) {
+  const id = String(userId || "");
+  if (!id) return;
+  const dn = String(displayName || "").trim() || id.slice(0, 8);
+  let row = onlineByUser.get(id);
+  if (!row) {
+    row = { displayName: dn, sockets: new Set() };
+    onlineByUser.set(id, row);
+  }
+  row.sockets.add(String(socketId));
+  row.displayName = dn;
+}
+
+function presenceRemoveSocket(socketId) {
+  const sid = String(socketId);
+  for (const [uid, row] of onlineByUser.entries()) {
+    if (row.sockets.has(sid)) {
+      row.sockets.delete(sid);
+      if (row.sockets.size === 0) onlineByUser.delete(uid);
+      return;
+    }
+  }
+}
+
+function presencePayload() {
+  return {
+    users: Array.from(onlineByUser.entries()).map(([user_id, v]) => ({
+      user_id,
+      display_name: v.displayName,
+    })),
+  };
+}
+
+function broadcastPresenceJoin(io, socket) {
+  const payload = presencePayload();
+  socket.emit("presence_roster", payload);
+  socket.broadcast.emit("presence_roster", payload);
+}
+
+function broadcastPresenceAll(io) {
+  io.emit("presence_roster", presencePayload());
+}
+
 async function lastMessagesForChannel(channelId, limit = 100) {
   const rows = await all(
     `select id, channel_id, channel_type, sender_user_id, sender_display_name, payload_json, created_at_ms
@@ -161,6 +207,16 @@ io.on("connection", (socket) => {
   const auth = socket.handshake.auth || {};
   const userId = typeof auth.userId === "string" ? auth.userId : "";
   const displayName = typeof auth.displayName === "string" ? auth.displayName : "member";
+
+  if (userId) {
+    presenceAdd(userId, displayName, socket.id);
+    broadcastPresenceJoin(io, socket);
+  }
+
+  socket.on("disconnect", () => {
+    presenceRemoveSocket(socket.id);
+    broadcastPresenceAll(io);
+  });
 
   socket.on("join_channel", async (payload, ack) => {
     const channelId = payload && typeof payload.channel_id === "string" ? payload.channel_id.trim() : "";
