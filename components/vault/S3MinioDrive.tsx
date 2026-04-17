@@ -354,7 +354,9 @@ export function S3MinioDrive() {
         snapPoints={snapFab}
         enablePanDownToClose
         backdropComponent={(p) => <BottomSheetBackdrop {...p} appearsOnIndex={0} disappearsOnIndex={-1} />}
-        enableDynamicSizing={false}>
+        enableDynamicSizing={false}
+        // @ts-expect-error Fabric / New Architecture guardrail (prop may be untyped by version)
+        disableFullWindowOverlay={Platform.OS === "ios"}>
         <View style={styles.sheetInner}>
           <Text style={styles.sheetTitle}>Upload</Text>
           <Pressable style={styles.sheetRow} onPress={() => void pickAndUpload("doc")}>
@@ -374,6 +376,8 @@ export function S3MinioDrive() {
         enablePanDownToClose
         backdropComponent={(p) => <BottomSheetBackdrop {...p} appearsOnIndex={0} disappearsOnIndex={-1} />}
         enableDynamicSizing={false}
+        // @ts-expect-error Fabric / New Architecture guardrail (prop may be untyped by version)
+        disableFullWindowOverlay={Platform.OS === "ios"}
         onDismiss={() => setActionItem(null)}>
         <View style={styles.sheetInner}>
           <Text style={styles.sheetTitle} numberOfLines={1}>

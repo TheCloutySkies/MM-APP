@@ -18,6 +18,7 @@ import {
   View,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
+import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { TacticalPalette } from "@/constants/TacticalTheme";
@@ -399,7 +400,25 @@ function MessageRow({
                 `https://www.google.com/maps/search/?api=1&query=${item.location!.lat},${item.location!.lng}`,
               )
             }>
-            <Image source={{ uri: staticMapUri(item.location.lat, item.location.lng) }} style={styles.mapPrev} />
+            {Platform.OS === "web" ? (
+              <Image source={{ uri: staticMapUri(item.location.lat, item.location.lng) }} style={styles.mapPrev} />
+            ) : (
+              <MapView
+                style={styles.mapPrev}
+                scrollEnabled={false}
+                zoomTapEnabled={false}
+                zoomEnabled={false}
+                pitchEnabled={false}
+                rotateEnabled={false}
+                region={{
+                  latitude: item.location.lat,
+                  longitude: item.location.lng,
+                  latitudeDelta: 0.02,
+                  longitudeDelta: 0.02,
+                }}>
+                <Marker coordinate={{ latitude: item.location.lat, longitude: item.location.lng }} />
+              </MapView>
+            )}
             <Text style={styles.mapLink}>Open in maps</Text>
           </Pressable>
         ) : null}

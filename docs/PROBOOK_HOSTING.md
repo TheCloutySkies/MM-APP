@@ -12,6 +12,16 @@ Use this when **everything should hit your ProBook** (web app, chat, MinIO) thro
 
 Your `~/.cloudflared/config.yml` ingress should map each hostname to the matching `http://localhost:PORT`. After edits: `sudo systemctl restart cloudflared` (or your equivalent).
 
+## Chat server CORS
+
+Set `MM_CHAT_CORS_ORIGIN` when you lock down the Socket.io API (comma-separated list is supported):
+
+```bash
+export MM_CHAT_CORS_ORIGIN="https://mmapp.cloutyskies.org,http://localhost:8081"
+```
+
+If unset, the server defaults to `*` (permissive).
+
 ## One-command local stack
 
 From the repo root:

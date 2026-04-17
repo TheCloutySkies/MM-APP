@@ -2,13 +2,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { listVaultS3ObjectsFlat, type VaultS3ListObject } from "@/lib/storage";
 
-export function vaultS3QueryKey(profileId: string | null) {
-  return ["vaultS3Objects", profileId] as const;
+/** Plan / cache key: `['vaultObjects', profileId]`. */
+export function vaultObjectsQueryKey(profileId: string | null) {
+  return ["vaultObjects", profileId] as const;
 }
 
 export function useVaultS3Objects(profileId: string | null) {
   return useQuery<VaultS3ListObject[]>({
-    queryKey: vaultS3QueryKey(profileId),
+    queryKey: vaultObjectsQueryKey(profileId),
     queryFn: async () => {
       if (!profileId) return [];
       const { data, error } = await listVaultS3ObjectsFlat(profileId);
@@ -23,6 +24,6 @@ export function useVaultS3Objects(profileId: string | null) {
 export function useInvalidateVaultS3() {
   const qc = useQueryClient();
   return (profileId: string | null) => {
-    void qc.invalidateQueries({ queryKey: vaultS3QueryKey(profileId) });
+    void qc.invalidateQueries({ queryKey: vaultObjectsQueryKey(profileId) });
   };
 }

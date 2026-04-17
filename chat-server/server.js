@@ -6,7 +6,18 @@ const sqlite3 = require("sqlite3").verbose();
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 const DB_PATH = process.env.MM_CHAT_DB_PATH || "messages.db";
-const CORS_ORIGIN = process.env.MM_CHAT_CORS_ORIGIN || "*";
+/** Comma-separated origins, or `*`. Example: `https://mmapp.cloutyskies.org,http://localhost:8081` */
+function parseCorsOrigin(raw) {
+  const v = typeof raw === "string" ? raw.trim() : "";
+  if (!v || v === "*") return "*";
+  const parts = v
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return "*";
+  return parts.length === 1 ? parts[0] : parts;
+}
+const CORS_ORIGIN = parseCorsOrigin(process.env.MM_CHAT_CORS_ORIGIN || "*");
 
 const GROUP_GLOBAL = "group:global";
 
