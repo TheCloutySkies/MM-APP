@@ -24,9 +24,9 @@ import {
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { Actions, Bubble, GiftedChat, MessageText } from "react-native-gifted-chat";
-import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { CommsMapPreview } from "@/components/comms/CommsMapPreview";
 import { TacticalPalette } from "@/constants/TacticalTheme";
 import { liveMessagesToGiftedMessages, type MmGiftedMessage } from "@/lib/comms/giftedAdapters";
 import { useLiveSocketContext } from "@/components/comms/LiveSocketProvider";
@@ -45,10 +45,6 @@ type Props = {
 };
 
 type MmContact = { id: string; username: string };
-
-function staticMapUri(lat: number, lng: number): string {
-  return `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lng}&zoom=15&size=280x140&markers=${lat},${lng},red-pushpin`;
-}
 
 function msgIdNum(id: string): number {
   const n = Number(id);
@@ -274,25 +270,7 @@ export function LiveCommsPanel({ variant, onCloseSheet, onCollapseTrailing }: Pr
                 `https://www.google.com/maps/search/?api=1&query=${env.location!.lat},${env.location!.lng}`,
               )
             }>
-            {Platform.OS === "web" ? (
-              <Image source={{ uri: staticMapUri(env.location.lat, env.location.lng) }} style={styles.gcMapPrev} />
-            ) : (
-              <MapView
-                style={styles.gcMapPrev}
-                scrollEnabled={false}
-                zoomTapEnabled={false}
-                zoomEnabled={false}
-                pitchEnabled={false}
-                rotateEnabled={false}
-                region={{
-                  latitude: env.location.lat,
-                  longitude: env.location.lng,
-                  latitudeDelta: 0.02,
-                  longitudeDelta: 0.02,
-                }}>
-                <Marker coordinate={{ latitude: env.location.lat, longitude: env.location.lng }} />
-              </MapView>
-            )}
+            <CommsMapPreview lat={env.location.lat} lng={env.location.lng} style={styles.gcMapPrev} />
             <Text style={styles.gcMapLink}>Open in maps</Text>
           </Pressable>
         );
@@ -606,25 +584,7 @@ function MessageRow({
                 `https://www.google.com/maps/search/?api=1&query=${item.location!.lat},${item.location!.lng}`,
               )
             }>
-            {Platform.OS === "web" ? (
-              <Image source={{ uri: staticMapUri(item.location.lat, item.location.lng) }} style={styles.mapPrev} />
-            ) : (
-              <MapView
-                style={styles.mapPrev}
-                scrollEnabled={false}
-                zoomTapEnabled={false}
-                zoomEnabled={false}
-                pitchEnabled={false}
-                rotateEnabled={false}
-                region={{
-                  latitude: item.location.lat,
-                  longitude: item.location.lng,
-                  latitudeDelta: 0.02,
-                  longitudeDelta: 0.02,
-                }}>
-                <Marker coordinate={{ latitude: item.location.lat, longitude: item.location.lng }} />
-              </MapView>
-            )}
+            <CommsMapPreview lat={item.location.lat} lng={item.location.lng} style={styles.mapPrev} />
             <Text style={styles.mapLink}>Open in maps</Text>
           </Pressable>
         ) : null}
