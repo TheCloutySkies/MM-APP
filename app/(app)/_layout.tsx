@@ -170,6 +170,7 @@ export default function AppLayout() {
   const COMM_RAIL_W = 320;
 
   return (
+    <LiveSocketProvider>
     <View style={styles.shell}>
       <ScorchedEarthListener />
       <OpsScreeningGate />
